@@ -12,8 +12,7 @@ use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use metadata::{
-    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, MutationResult, ObjectMeta,
-    PutObjectRequest,
+    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ObjectMeta, PutObjectRequest,
 };
 use repo::MetadataRepo;
 
@@ -102,15 +101,14 @@ async fn put_object(
     State(repo): State<MetadataRepo>,
     Path((bucket, key)): Path<(String, String)>,
     Json(body): Json<PutObjectRequest>,
-) -> Result<Json<MutationResult>, (StatusCode, String)> {
+) -> Result<StatusCode, (StatusCode, String)> {
     if bucket.is_empty() || key.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "bucket and key required".into()));
     }
-    let result = repo
-        .put_object(&bucket, &key, body)
+    repo.put_object(&bucket, &key, body)
         .await
         .map_err(internal_error)?;
-    Ok(Json(result))
+    Ok(StatusCode::OK)
 }
 
 async fn get_object(
@@ -130,14 +128,15 @@ async fn get_object(
 async fn delete_object(
     State(repo): State<MetadataRepo>,
     Path((bucket, key)): Path<(String, String)>,
-) -> Result<Json<MutationResult>, (StatusCode, String)> {
-    let result = repo
+) -> Result<StatusCode, (StatusCode, String)> {
+    let deleted = repo
         .delete_object(&bucket, &key)
         .await
         .map_err(internal_error)?;
-    match result {
-        Some(result) => Ok(Json(result)),
-        None => Err((StatusCode::NOT_FOUND, "object not found".into())),
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, "object not found".into()))
     }
 }
 

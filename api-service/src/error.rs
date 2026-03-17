@@ -22,6 +22,8 @@ pub enum ApiError {
 pub enum ChunkServiceError {
     #[error("request failed: {0}")]
     Request(#[from] reqwest::Error),
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
     #[error("chunk not found: {0}")]
     NotFound(String),
 }

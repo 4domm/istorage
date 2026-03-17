@@ -18,6 +18,8 @@ use crate::config::Config;
 use crate::error::ApiError;
 use crate::metadata_client::MetadataClient;
 
+const GET_BATCH_WINDOW: usize = 16;
+
 pub struct AppState {
     pub config: Config,
     pub metadata: MetadataClient,
@@ -40,6 +42,37 @@ fn build_chunker_map(nodes: Vec<ChunkerNode>) -> HashMap<String, String> {
         .into_iter()
         .map(|node| (node.node_id, node.base_url))
         .collect()
+}
+
+async fn fetch_window_batches(
+    chunk: &ChunkClient,
+    node_map: &HashMap<String, String>,
+    window: &[ChunkRef],
+) -> Result<HashMap<String, HashMap<String, Bytes>>, std::io::Error> {
+    let mut ids_by_node: HashMap<String, Vec<String>> = HashMap::new();
+    for chunk_ref in window {
+        ids_by_node
+            .entry(chunk_ref.node_id.clone())
+            .or_default()
+            .push(chunk_ref.chunk_id.clone());
+    }
+
+    let mut batches: HashMap<String, HashMap<String, Bytes>> = HashMap::new();
+    for (node_id, chunk_ids) in ids_by_node {
+        let Some(base_url) = node_map.get(&node_id) else {
+            return Err(std::io::Error::other(format!(
+                "missing chunker node {} for batch get",
+                node_id
+            )));
+        };
+        let chunks = chunk
+            .batch_get_chunks(base_url, &chunk_ids)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        batches.insert(node_id, chunks);
+    }
+
+    Ok(batches)
 }
 
 pub async fn create_router(config: Config) -> Result<Router, ApiError> {
@@ -285,21 +318,31 @@ async fn get_object(
     let manifest = meta.manifest;
     let node_map = build_chunker_map(state.metadata.list_chunker_nodes().await?);
     let stream = stream! {
-        for chunk_ref in manifest {
-            let Some(base_url) = node_map.get(&chunk_ref.node_id) else {
-                yield Err(std::io::Error::other(format!(
-                    "missing chunker node {} for chunk {}",
-                    chunk_ref.node_id,
-                    chunk_ref.chunk_id
-                )));
-                break;
-            };
-            match chunk.get_chunk(base_url, &chunk_ref.chunk_id).await {
-                Ok(bytes) => yield Ok::<Bytes, std::io::Error>(bytes),
-                Err(e) => {
-                    yield Err(std::io::Error::other(e.to_string()));
+        for window in manifest.chunks(GET_BATCH_WINDOW) {
+            let mut batches = match fetch_window_batches(&chunk, &node_map, window).await {
+                Ok(batches) => batches,
+                Err(err) => {
+                    yield Err(err);
                     break;
                 }
+            };
+
+            for chunk_ref in window {
+                let Some(chunks) = batches.get_mut(&chunk_ref.node_id) else {
+                    yield Err(std::io::Error::other(format!(
+                        "missing batch data for node {}",
+                        chunk_ref.node_id
+                    )));
+                    break;
+                };
+                let Some(bytes) = chunks.remove(&chunk_ref.chunk_id) else {
+                    yield Err(std::io::Error::other(format!(
+                        "missing chunk {} in batch response",
+                        chunk_ref.chunk_id
+                    )));
+                    break;
+                };
+                yield Ok::<Bytes, std::io::Error>(bytes);
             }
         }
     };
@@ -315,8 +358,8 @@ async fn delete_object(
     Path((bucket, key)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
     validate_bucket(&bucket)?;
-    let Some(_) = state.metadata.delete_object(&bucket, &key).await? else {
+    if !state.metadata.delete_object(&bucket, &key).await? {
         return Ok(StatusCode::NOT_FOUND);
-    };
+    }
     Ok(StatusCode::NO_CONTENT)
 }

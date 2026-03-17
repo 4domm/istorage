@@ -43,7 +43,9 @@ CMD ["metadata"]
 
 FROM runtime-base AS chunker-service
 COPY --from=builder /app/target/release/chunker /usr/local/bin/chunker
+COPY --from=builder /app/config.docker.yaml /app/config.docker.yaml
 RUN mkdir -p /data/chunks
 ENV CHUNK_DB_PATH=/data/chunks
+ENV CONFIG_PATH=/app/config.docker.yaml
 EXPOSE 3002
 CMD ["chunker"]

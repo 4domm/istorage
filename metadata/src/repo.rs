@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashMap;
 
-use metadata::{ChunkerNode, GcAckResult, GcTask, MutationResult, ObjectMeta, PutObjectRequest};
+use metadata::{ChunkerNode, GcAckResult, GcTask, ObjectMeta, PutObjectRequest};
 
 type ChunkKey = (String, String);
 
@@ -119,12 +119,7 @@ impl MetadataRepo {
         Self { pool }
     }
 
-    pub async fn put_object(
-        &self,
-        bucket: &str,
-        key: &str,
-        body: PutObjectRequest,
-    ) -> Result<MutationResult> {
+    pub async fn put_object(&self, bucket: &str, key: &str, body: PutObjectRequest) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         let old_manifest_json: Option<serde_json::Value> = sqlx::query_scalar(
@@ -173,12 +168,7 @@ impl MetadataRepo {
         enqueue_gc_tasks(&mut tx, &orphan_chunks).await?;
 
         tx.commit().await?;
-        Ok(MutationResult {
-            orphan_chunks: orphan_chunks
-                .into_iter()
-                .map(|(_, chunk_id)| chunk_id)
-                .collect(),
-        })
+        Ok(())
     }
 
     pub async fn get_object(&self, bucket: &str, key: &str) -> Result<Option<ObjectMeta>> {
@@ -203,7 +193,7 @@ impl MetadataRepo {
         }))
     }
 
-    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<Option<MutationResult>> {
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
 
         let old_manifest_json: Option<serde_json::Value> = sqlx::query_scalar(
@@ -215,7 +205,7 @@ impl MetadataRepo {
         .await?;
 
         let Some(old_manifest_json) = old_manifest_json else {
-            return Ok(None);
+            return Ok(false);
         };
 
         let old_manifest = parse_manifest(old_manifest_json)?;
@@ -231,12 +221,7 @@ impl MetadataRepo {
         enqueue_gc_tasks(&mut tx, &orphan_chunks).await?;
 
         tx.commit().await?;
-        Ok(Some(MutationResult {
-            orphan_chunks: orphan_chunks
-                .into_iter()
-                .map(|(_, chunk_id)| chunk_id)
-                .collect(),
-        }))
+        Ok(true)
     }
 
     pub async fn gc_next(&self) -> Result<Option<GcTask>> {

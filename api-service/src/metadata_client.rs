@@ -1,7 +1,6 @@
 use anyhow::Result;
 use metadata::{
-    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, MutationResult, ObjectMeta,
-    PutObjectRequest,
+    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ObjectMeta, PutObjectRequest,
 };
 use reqwest::Client;
 
@@ -46,15 +45,14 @@ impl MetadataClient {
         Ok(Some(meta))
     }
 
-    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<Option<MutationResult>> {
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<bool> {
         let url = self.path(bucket, key);
         let res = self.client.delete(&url).send().await?;
         if res.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+            return Ok(false);
         }
-        let res = res.error_for_status()?;
-        let result = res.json().await?;
-        Ok(Some(result))
+        res.error_for_status()?;
+        Ok(true)
     }
 
     pub async fn gc_next(&self) -> Result<Option<GcTask>> {

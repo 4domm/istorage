@@ -23,11 +23,6 @@ pub struct PutObjectRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MutationResult {
-    pub orphan_chunks: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GcTask {
     pub seq: u64,
     pub chunk_id: String,

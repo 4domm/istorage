@@ -290,7 +290,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "rocksdb",
+ "serde",
+ "serde_yaml",
  "tokio",
  "tower-http 0.5.2",
  "tracing",
