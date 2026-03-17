@@ -1,4 +1,0 @@
-port: 3000
-metadata_service_url: "http://127.0.0.1:3001"
-chunk_service_url: "http://127.0.0.1:3002"
-chunk_size: 262144

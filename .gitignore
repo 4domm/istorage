@@ -1,0 +1,7 @@
+/target/
+.cargo-target/
+.tmp/
+__pycache__/
+*.pyc
+**/data/
+*.log

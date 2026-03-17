@@ -9,8 +9,8 @@ tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.5", features = ["trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-foundationdb = { version = "0.10", features = ["fdb-7_1"] }
-futures = "0.3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "migrate", "macros"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: sstorage
+      POSTGRES_USER: sstorage
+      POSTGRES_PASSWORD: sstorage
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sstorage -d sstorage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  metadata:
+    build:
+      context: .
+      target: metadata-service
+    environment:
+      METADATA_DATABASE_URL: postgres://sstorage:sstorage@postgres:5432/sstorage
+      METADATA_LOG_FILTER: metadata=info,tower_http=info
+      CHUNKER_NODES: chunker-a=http://chunker-a:3002,chunker-b=http://chunker-b:3002
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+
+  chunker-a:
+    build:
+      context: .
+      target: chunker-service
+    environment:
+      CHUNKER_LOG_FILTER: chunker=info,tower_http=info
+      CHUNK_PORT: 3002
+    volumes:
+      - chunk_a_data:/data/chunks
+    ports:
+      - "3002:3002"
+
+  chunker-b:
+    build:
+      context: .
+      target: chunker-service
+    environment:
+      CHUNKER_LOG_FILTER: chunker=info,tower_http=info
+      CHUNK_PORT: 3002
+    volumes:
+      - chunk_b_data:/data/chunks
+    ports:
+      - "3003:3002"
+
+  api-service:
+    build:
+      context: .
+      target: api-service
+    environment:
+      API_SERVICE_LOG_FILTER: api_service=info,tower_http=info
+    depends_on:
+      - metadata
+      - chunker-a
+      - chunker-b
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  chunk_a_data:
+  chunk_b_data:
