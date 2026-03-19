@@ -12,7 +12,8 @@ use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use metadata::{
-    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ObjectMeta, PutObjectRequest,
+    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ListBucketResponse,
+    ObjectMeta, PutObjectRequest,
 };
 use repo::MetadataRepo;
 
@@ -125,6 +126,20 @@ async fn get_object(
     }
 }
 
+async fn list_bucket(
+    State(repo): State<MetadataRepo>,
+    Path(bucket): Path<String>,
+) -> Result<Json<ListBucketResponse>, (StatusCode, String)> {
+    if bucket.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "bucket required".into()));
+    }
+    let keys = repo
+        .list_bucket_keys(&bucket)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(ListBucketResponse { keys }))
+}
+
 async fn delete_object(
     State(repo): State<MetadataRepo>,
     Path((bucket, key)): Path<(String, String)>,
@@ -217,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
             "/objects/:bucket/*key",
             put(put_object).get(get_object).delete(delete_object),
         )
+        .route("/buckets/:bucket/objects", get(list_bucket))
         .route("/chunks/:node_id/:chunk_id/in-use", get(chunk_in_use))
         .route("/chunkers", get(list_chunker_nodes))
         .with_state(repo.clone())

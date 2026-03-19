@@ -5,13 +5,17 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::put,
-    Router,
+    Json, Router,
 };
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
 use metadata::{ChunkRef, ChunkerNode, PutObjectRequest};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use crate::chunk_client::ChunkClient;
 use crate::config::Config;
@@ -49,12 +53,12 @@ async fn fetch_window_batches(
     node_map: &HashMap<String, String>,
     window: &[ChunkRef],
 ) -> Result<HashMap<String, HashMap<String, Bytes>>, std::io::Error> {
-    let mut ids_by_node: HashMap<String, Vec<String>> = HashMap::new();
+    let mut ids_by_node: HashMap<String, HashSet<String>> = HashMap::new();
     for chunk_ref in window {
         ids_by_node
             .entry(chunk_ref.node_id.clone())
             .or_default()
-            .push(chunk_ref.chunk_id.clone());
+            .insert(chunk_ref.chunk_id.clone());
     }
 
     let mut batches: HashMap<String, HashMap<String, Bytes>> = HashMap::new();
@@ -65,10 +69,26 @@ async fn fetch_window_batches(
                 node_id
             )));
         };
-        let chunks = chunk
-            .batch_get_chunks(base_url, &chunk_ids)
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let chunk_ids: Vec<String> = chunk_ids.into_iter().collect();
+        let chunks = match chunk.batch_get_chunks(base_url, &chunk_ids).await {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                tracing::warn!(
+                    "batch get failed for node {}, fallback to single gets: {}",
+                    node_id,
+                    err
+                );
+                let mut single = HashMap::new();
+                for chunk_id in &chunk_ids {
+                    let bytes = chunk
+                        .get_chunk(base_url, chunk_id)
+                        .await
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    single.insert(chunk_id.clone(), bytes);
+                }
+                single
+            }
+        };
         batches.insert(node_id, chunks);
     }
 
@@ -85,6 +105,7 @@ pub async fn create_router(config: Config) -> Result<Router, ApiError> {
     let state = Arc::new(state);
 
     let app = Router::new()
+        .route("/:bucket", axum::routing::get(list_bucket))
         .route(
             "/:bucket/*key",
             put(put_object).get(get_object).delete(delete_object),
@@ -328,21 +349,21 @@ async fn get_object(
             };
 
             for chunk_ref in window {
-                let Some(chunks) = batches.get_mut(&chunk_ref.node_id) else {
+                let Some(chunks) = batches.get(&chunk_ref.node_id) else {
                     yield Err(std::io::Error::other(format!(
                         "missing batch data for node {}",
                         chunk_ref.node_id
                     )));
                     break;
                 };
-                let Some(bytes) = chunks.remove(&chunk_ref.chunk_id) else {
+                let Some(bytes) = chunks.get(&chunk_ref.chunk_id) else {
                     yield Err(std::io::Error::other(format!(
                         "missing chunk {} in batch response",
                         chunk_ref.chunk_id
                     )));
                     break;
                 };
-                yield Ok::<Bytes, std::io::Error>(bytes);
+                yield Ok::<Bytes, std::io::Error>(bytes.clone());
             }
         }
     };
@@ -351,6 +372,15 @@ async fn get_object(
     headers.insert("Content-Length", meta.size.to_string().parse().unwrap());
     headers.insert("ETag", meta.etag.parse().unwrap());
     Ok((StatusCode::OK, headers, Body::from_stream(stream)))
+}
+
+async fn list_bucket(
+    State(state): State<Arc<AppState>>,
+    Path(bucket): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    validate_bucket(&bucket)?;
+    let keys = state.metadata.list_bucket_keys(&bucket).await?;
+    Ok((StatusCode::OK, Json(keys)))
 }
 
 async fn delete_object(

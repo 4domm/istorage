@@ -193,6 +193,19 @@ impl MetadataRepo {
         }))
     }
 
+    pub async fn list_bucket_keys(&self, bucket: &str) -> Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT object_key
+             FROM objects
+             WHERE bucket = $1
+             ORDER BY object_key ASC",
+        )
+        .bind(bucket)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
 

@@ -63,6 +63,21 @@ impl ChunkClient {
         Self::decode_batch_response(body)
     }
 
+    pub async fn get_chunk(
+        &self,
+        base_url: &str,
+        chunk_id: &str,
+    ) -> Result<Bytes, ChunkServiceError> {
+        let url = self.chunk_url(base_url, chunk_id);
+        let res = self.client.get(&url).send().await?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(ChunkServiceError::NotFound(chunk_id.to_string()));
+        }
+        let res = res.error_for_status().map_err(ChunkServiceError::Request)?;
+        let bytes = res.bytes().await.map_err(ChunkServiceError::Request)?;
+        Ok(bytes)
+    }
+
     fn decode_batch_response(body: Bytes) -> Result<HashMap<String, Bytes>, ChunkServiceError> {
         let mut buf = body;
         let mut chunks = HashMap::new();

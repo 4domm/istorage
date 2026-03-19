@@ -1,6 +1,7 @@
 use anyhow::Result;
 use metadata::{
-    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ObjectMeta, PutObjectRequest,
+    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ListBucketResponse,
+    ObjectMeta, PutObjectRequest,
 };
 use reqwest::Client;
 
@@ -90,5 +91,14 @@ impl MetadataClient {
         let res = res.error_for_status()?;
         let nodes = res.json().await?;
         Ok(nodes)
+    }
+
+    pub async fn list_bucket_keys(&self, bucket: &str) -> Result<Vec<String>> {
+        let encoded_bucket = urlencoding::encode(bucket).into_owned();
+        let url = format!("{}/buckets/{}/objects", self.base_url, encoded_bucket);
+        let res = self.client.get(&url).send().await?;
+        let res = res.error_for_status()?;
+        let body: ListBucketResponse = res.json().await?;
+        Ok(body.keys)
     }
 }
