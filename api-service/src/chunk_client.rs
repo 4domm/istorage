@@ -14,6 +14,11 @@ struct BatchGetRequest<'a> {
     chunk_ids: &'a [String],
 }
 
+#[derive(Serialize)]
+struct BatchDeleteRequest<'a> {
+    chunk_ids: &'a [String],
+}
+
 impl ChunkClient {
     pub fn new() -> Self {
         Self {
@@ -27,6 +32,10 @@ impl ChunkClient {
 
     fn batch_get_url(&self, base_url: &str) -> String {
         format!("{}/chunks/batch-get", base_url.trim_end_matches('/'))
+    }
+
+    fn batch_delete_url(&self, base_url: &str) -> String {
+        format!("{}/chunks/batch-delete", base_url.trim_end_matches('/'))
     }
 
     pub async fn put_chunk(
@@ -63,26 +72,18 @@ impl ChunkClient {
         Self::decode_batch_response(body)
     }
 
-    pub async fn get_chunk(
-        &self,
-        base_url: &str,
-        chunk_id: &str,
-    ) -> Result<Bytes, ChunkServiceError> {
-        let url = self.chunk_url(base_url, chunk_id);
-        let res = self.client.get(&url).send().await?;
-        if res.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(ChunkServiceError::NotFound(chunk_id.to_string()));
-        }
-        let res = res.error_for_status().map_err(ChunkServiceError::Request)?;
-        let bytes = res.bytes().await.map_err(ChunkServiceError::Request)?;
-        Ok(bytes)
-    }
-
     fn decode_batch_response(body: Bytes) -> Result<HashMap<String, Bytes>, ChunkServiceError> {
         let mut buf = body;
         let mut chunks = HashMap::new();
 
-        while buf.has_remaining() {
+        if buf.remaining() < 4 {
+            return Err(ChunkServiceError::InvalidResponse(
+                "invalid batch chunk framing: missing item count".into(),
+            ));
+        }
+        let count = buf.get_u32() as usize;
+
+        for _ in 0..count {
             if buf.remaining() < 4 {
                 return Err(ChunkServiceError::InvalidResponse(
                     "invalid batch chunk framing: missing id length".into(),
@@ -96,6 +97,12 @@ impl ChunkClient {
             }
             let chunk_id = String::from_utf8(buf.copy_to_bytes(id_len).to_vec())
                 .map_err(|e| ChunkServiceError::InvalidResponse(e.to_string()))?;
+
+            if buf.remaining() < 8 {
+                return Err(ChunkServiceError::InvalidResponse(
+                    "invalid batch chunk framing: missing payload length".into(),
+                ));
+            }
             let data_len = buf.get_u64() as usize;
             if buf.remaining() < data_len {
                 return Err(ChunkServiceError::InvalidResponse(
@@ -104,6 +111,12 @@ impl ChunkClient {
             }
             let chunk_bytes = buf.copy_to_bytes(data_len);
             chunks.insert(chunk_id, chunk_bytes);
+        }
+
+        if buf.has_remaining() {
+            return Err(ChunkServiceError::InvalidResponse(
+                "invalid batch chunk framing: trailing bytes".into(),
+            ));
         }
 
         Ok(chunks)
@@ -119,6 +132,21 @@ impl ChunkClient {
         if res.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(());
         }
+        res.error_for_status().map_err(ChunkServiceError::Request)?;
+        Ok(())
+    }
+
+    pub async fn batch_delete_chunks(
+        &self,
+        base_url: &str,
+        chunk_ids: &[String],
+    ) -> Result<(), ChunkServiceError> {
+        if chunk_ids.is_empty() {
+            return Ok(());
+        }
+        let url = self.batch_delete_url(base_url);
+        let req = BatchDeleteRequest { chunk_ids };
+        let res = self.client.post(&url).json(&req).send().await?;
         res.error_for_status().map_err(ChunkServiceError::Request)?;
         Ok(())
     }

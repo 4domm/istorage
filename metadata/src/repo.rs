@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashMap;
 
-use metadata::{ChunkerNode, GcAckResult, GcTask, ObjectMeta, PutObjectRequest};
+use metadata::{ChunkerNode, GcTask, ObjectMeta, PutObjectRequest};
 
 type ChunkKey = (String, String);
 
@@ -193,17 +193,103 @@ impl MetadataRepo {
         }))
     }
 
-    pub async fn list_bucket_keys(&self, bucket: &str) -> Result<Vec<String>> {
-        let rows: Vec<String> = sqlx::query_scalar(
+    pub async fn list_bucket_keys(
+        &self,
+        bucket: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<String>, Option<String>)> {
+        let db_limit =
+            i64::try_from(limit.saturating_add(1)).map_err(|_| anyhow!("list limit overflow"))?;
+        let mut rows: Vec<String> = sqlx::query_scalar(
             "SELECT object_key
              FROM objects
              WHERE bucket = $1
-             ORDER BY object_key ASC",
+               AND ($2::text IS NULL OR object_key > $2)
+             ORDER BY object_key ASC
+             LIMIT $3",
         )
         .bind(bucket)
+        .bind(cursor)
+        .bind(db_limit)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows)
+
+        let next_cursor = if rows.len() > limit {
+            rows.truncate(limit);
+            rows.last().cloned()
+        } else {
+            None
+        };
+        Ok((rows, next_cursor))
+    }
+
+    pub async fn gc_next_batch(
+        &self,
+        limit: usize,
+        owner: &str,
+        lease_seconds: u64,
+    ) -> Result<Vec<GcTask>> {
+        let limit = i64::try_from(limit).map_err(|_| anyhow!("gc batch limit overflow"))?;
+        let lease_seconds =
+            i64::try_from(lease_seconds).map_err(|_| anyhow!("gc lease overflow"))?;
+        let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+            "WITH candidates AS (
+                SELECT seq
+                FROM gc_queue
+                WHERE claimed_until IS NULL
+                   OR claimed_until < NOW()
+                   OR claimed_by = $2
+                ORDER BY seq ASC
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+             ),
+             claimed AS (
+                UPDATE gc_queue q
+                SET claimed_by = $2,
+                    claimed_until = NOW() + ($3::text || ' seconds')::interval
+                FROM candidates c
+                WHERE q.seq = c.seq
+                RETURNING q.seq, q.chunk_id, q.node_id
+             )
+             SELECT c.seq, c.chunk_id, c.node_id, n.base_url
+             FROM claimed c
+             JOIN chunker_nodes n ON n.node_id = c.node_id
+             ORDER BY c.seq ASC",
+        )
+        .bind(limit)
+        .bind(owner)
+        .bind(lease_seconds)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut tasks = Vec::with_capacity(rows.len());
+        for (seq, chunk_id, node_id, base_url) in rows {
+            tasks.push(GcTask {
+                seq: u64::try_from(seq).map_err(|_| anyhow!("negative gc seq"))?,
+                chunk_id,
+                node_id,
+                base_url,
+            });
+        }
+        Ok(tasks)
+    }
+
+    pub async fn gc_ack_batch(&self, owner: &str, seqs: &[u64]) -> Result<u64> {
+        if seqs.is_empty() {
+            return Ok(0);
+        }
+        let seqs: Vec<i64> = seqs
+            .iter()
+            .map(|seq| i64::try_from(*seq).map_err(|_| anyhow!("gc seq overflow")))
+            .collect::<Result<Vec<_>>>()?;
+
+        let deleted = sqlx::query("DELETE FROM gc_queue WHERE seq = ANY($1) AND claimed_by = $2")
+            .bind(&seqs)
+            .bind(owner)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(deleted)
     }
 
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<bool> {
@@ -235,39 +321,6 @@ impl MetadataRepo {
 
         tx.commit().await?;
         Ok(true)
-    }
-
-    pub async fn gc_next(&self) -> Result<Option<GcTask>> {
-        let row: Option<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT q.seq, q.chunk_id, q.node_id, n.base_url
-             FROM gc_queue q
-             JOIN chunker_nodes n ON n.node_id = q.node_id
-             ORDER BY q.seq ASC
-             LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(match row {
-            Some((seq, chunk_id, node_id, base_url)) => Some(GcTask {
-                seq: u64::try_from(seq).map_err(|_| anyhow!("negative gc seq"))?,
-                chunk_id,
-                node_id,
-                base_url,
-            }),
-            None => None,
-        })
-    }
-
-    pub async fn gc_ack(&self, seq: u64) -> Result<GcAckResult> {
-        let seq = i64::try_from(seq).map_err(|_| anyhow!("gc seq overflow"))?;
-        let deleted = sqlx::query("DELETE FROM gc_queue WHERE seq = $1")
-            .bind(seq)
-            .execute(&self.pool)
-            .await?
-            .rows_affected()
-            > 0;
-        Ok(GcAckResult { acked: deleted })
     }
 
     pub async fn chunk_in_use(&self, node_id: &str, chunk_id: &str) -> Result<bool> {

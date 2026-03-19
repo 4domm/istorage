@@ -9,6 +9,10 @@ pub struct Config {
     pub metadata_service_url: String,
     #[serde(default = "default_chunk_size")]
     pub chunk_size: usize,
+    #[serde(default = "default_get_batch_window")]
+    pub get_batch_window: usize,
+    #[serde(default = "default_gc_batch_size")]
+    pub gc_batch_size: usize,
 }
 
 fn default_api_service_addr() -> String {
@@ -20,6 +24,12 @@ fn default_metadata_url() -> String {
 fn default_chunk_size() -> usize {
     256 * 1024
 }
+fn default_get_batch_window() -> usize {
+    16
+}
+fn default_gc_batch_size() -> usize {
+    128
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -27,6 +37,8 @@ impl Default for Config {
             api_service_addr: default_api_service_addr(),
             metadata_service_url: default_metadata_url(),
             chunk_size: default_chunk_size(),
+            get_batch_window: default_get_batch_window(),
+            gc_batch_size: default_gc_batch_size(),
         }
     }
 }
@@ -42,13 +54,30 @@ impl Config {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::info!("config file not found, using defaults: {}", path.display());
-                return Ok(Self::default());
+                let mut config = Self::default();
+                config.apply_env_overrides()?;
+                return Ok(config);
             }
             Err(e) => return Err(anyhow::anyhow!("read config {}: {}", path.display(), e)),
         };
-        let config: Config =
+        let mut config: Config =
             serde_yaml::from_str(&yaml).map_err(|e| anyhow::anyhow!("parse config: {}", e))?;
+        config.apply_env_overrides()?;
         Ok(config)
+    }
+
+    fn apply_env_overrides(&mut self) -> anyhow::Result<()> {
+        if let Ok(raw) = std::env::var("API_GET_BATCH_WINDOW") {
+            self.get_batch_window = raw
+                .parse()
+                .map_err(|e| anyhow::anyhow!("invalid API_GET_BATCH_WINDOW {}: {}", raw, e))?;
+        }
+        if let Ok(raw) = std::env::var("API_GC_BATCH_SIZE") {
+            self.gc_batch_size = raw
+                .parse()
+                .map_err(|e| anyhow::anyhow!("invalid API_GC_BATCH_SIZE {}: {}", raw, e))?;
+        }
+        Ok(())
     }
 
     pub fn socket_addr(&self) -> anyhow::Result<SocketAddr> {

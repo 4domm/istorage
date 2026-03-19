@@ -59,6 +59,8 @@ services:
       target: api-service
     environment:
       API_SERVICE_LOG_FILTER: api_service=info,tower_http=info
+      API_GET_BATCH_WINDOW: 16
+      API_GC_BATCH_SIZE: 128
     depends_on:
       - metadata
       - chunker-a

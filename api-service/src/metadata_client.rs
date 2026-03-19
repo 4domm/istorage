@@ -1,6 +1,6 @@
 use anyhow::Result;
 use metadata::{
-    ChunkInUseResult, ChunkerNode, GcAckRequest, GcAckResult, GcTask, ListBucketResponse,
+    ChunkInUseResult, ChunkerNode, GcAckBatchRequest, GcAckBatchResult, GcTask, ListBucketResponse,
     ObjectMeta, PutObjectRequest,
 };
 use reqwest::Client;
@@ -56,20 +56,37 @@ impl MetadataClient {
         Ok(true)
     }
 
-    pub async fn gc_next(&self) -> Result<Option<GcTask>> {
-        let url = format!("{}/gc/next", self.base_url);
-        let res = self.client.get(&url).send().await?;
+    pub async fn gc_next_batch(
+        &self,
+        limit: usize,
+        owner: &str,
+        lease_seconds: u64,
+    ) -> Result<Vec<GcTask>> {
+        let url = format!("{}/gc/next-batch", self.base_url);
+        let res = self
+            .client
+            .get(&url)
+            .query(&[
+                ("limit", limit.to_string()),
+                ("owner", owner.to_string()),
+                ("lease_seconds", lease_seconds.to_string()),
+            ])
+            .send()
+            .await?;
         let res = res.error_for_status()?;
-        let task = res.json().await?;
-        Ok(task)
+        let tasks = res.json().await?;
+        Ok(tasks)
     }
 
-    pub async fn gc_ack(&self, seq: u64) -> Result<bool> {
-        let url = format!("{}/gc/ack", self.base_url);
-        let body = GcAckRequest { seq };
+    pub async fn gc_ack_batch(&self, owner: &str, seqs: &[u64]) -> Result<u64> {
+        let url = format!("{}/gc/ack-batch", self.base_url);
+        let body = GcAckBatchRequest {
+            owner: owner.to_string(),
+            seqs: seqs.to_vec(),
+        };
         let res = self.client.put(&url).json(&body).send().await?;
         let res = res.error_for_status()?;
-        let result: GcAckResult = res.json().await?;
+        let result: GcAckBatchResult = res.json().await?;
         Ok(result.acked)
     }
 
@@ -93,12 +110,24 @@ impl MetadataClient {
         Ok(nodes)
     }
 
-    pub async fn list_bucket_keys(&self, bucket: &str) -> Result<Vec<String>> {
+    pub async fn list_bucket_keys(
+        &self,
+        bucket: &str,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+    ) -> Result<ListBucketResponse> {
         let encoded_bucket = urlencoding::encode(bucket).into_owned();
         let url = format!("{}/buckets/{}/objects", self.base_url, encoded_bucket);
-        let res = self.client.get(&url).send().await?;
+        let mut req = self.client.get(&url);
+        if let Some(limit) = limit {
+            req = req.query(&[("limit", limit)]);
+        }
+        if let Some(cursor) = cursor {
+            req = req.query(&[("cursor", cursor)]);
+        }
+        let res = req.send().await?;
         let res = res.error_for_status()?;
-        let body: ListBucketResponse = res.json().await?;
-        Ok(body.keys)
+        let body = res.json().await?;
+        Ok(body)
     }
 }

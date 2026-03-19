@@ -25,6 +25,7 @@ pub struct PutObjectRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ListBucketResponse {
     pub keys: Vec<String>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,13 +37,14 @@ pub struct GcTask {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GcAckRequest {
-    pub seq: u64,
+pub struct GcAckBatchRequest {
+    pub owner: String,
+    pub seqs: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GcAckResult {
-    pub acked: bool,
+pub struct GcAckBatchResult {
+    pub acked: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
