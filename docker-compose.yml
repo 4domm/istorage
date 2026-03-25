@@ -1,31 +1,48 @@
 services:
-  postgres:
-    image: postgres:16
+  foundationdb:
+    image: foundationdb/foundationdb:7.3.69
     environment:
-      POSTGRES_DB: sstorage
-      POSTGRES_USER: sstorage
-      POSTGRES_PASSWORD: sstorage
+      FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sstorage -d sstorage"]
+      test: ["CMD-SHELL", "pgrep fdbserver >/dev/null"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - foundationdb_data:/var/fdb/data
+      - foundationdb_logs:/var/fdb/logs
     ports:
-      - "5432:5432"
+      - "4500:4500"
+
+  foundationdb-init:
+    image: foundationdb/foundationdb:7.3.69
+    environment:
+      FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
+    depends_on:
+      foundationdb:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-lc"]
+    command: >
+      "for i in $(seq 1 30); do
+         fdbcli --exec 'configure new single memory; status' && exit 0;
+         sleep 2;
+       done;
+       exit 1"
 
   metadata:
     build:
       context: .
       target: metadata-service
     environment:
-      METADATA_DATABASE_URL: postgres://sstorage:sstorage@postgres:5432/sstorage
-      METADATA_LOG_FILTER: metadata=info,tower_http=info
+      LOG_LEVEL: info
+      FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
+      FDB_API_VERSION: 730
+      METADATA_GC_BATCH_SIZE: 128
       CHUNKER_NODES: chunker-a=http://chunker-a:3002,chunker-b=http://chunker-b:3002
+      CHUNKER_HEALTHCHECK_INTERVAL_MS: 2000
     depends_on:
-      postgres:
-        condition: service_healthy
+      foundationdb-init:
+        condition: service_completed_successfully
     ports:
       - "3001:3001"
 
@@ -60,7 +77,6 @@ services:
     environment:
       API_SERVICE_LOG_FILTER: api_service=info,tower_http=info
       API_GET_BATCH_WINDOW: 16
-      API_GC_BATCH_SIZE: 128
     depends_on:
       - metadata
       - chunker-a
@@ -69,6 +85,7 @@ services:
       - "3000:3000"
 
 volumes:
-  postgres_data:
+  foundationdb_data:
+  foundationdb_logs:
   chunk_a_data:
   chunk_b_data:
