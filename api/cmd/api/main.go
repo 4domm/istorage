@@ -6,10 +6,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"sstorage/api/internal/api"
 	"sstorage/api/internal/config"
+	"syscall"
 )
 
 func main() {

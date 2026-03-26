@@ -3,14 +3,20 @@ FROM foundationdb/foundationdb:7.3.69 AS fdb-dist
 FROM golang:1.25-bookworm AS go-builder
 
 WORKDIR /app
+ENV GOPROXY=https://proxy.golang.org,direct
+ENV GOSUMDB=sum.golang.org
+ARG FDB_VERSION=7.3.69
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=fdb-dist /usr/include/foundationdb /usr/include/foundationdb
 COPY --from=fdb-dist /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
+RUN mkdir -p /usr/include/foundationdb \
+    && curl -fsSL "https://raw.githubusercontent.com/apple/foundationdb/${FDB_VERSION}/bindings/c/foundationdb/fdb_c.h" -o /usr/include/foundationdb/fdb_c.h \
+    && curl -fsSL "https://raw.githubusercontent.com/apple/foundationdb/${FDB_VERSION}/bindings/c/foundationdb/fdb.options" -o /usr/include/foundationdb/fdb.options
 
 COPY config.docker.yaml ./config.docker.yaml
 COPY metadata ./metadata
@@ -19,15 +25,15 @@ COPY chunk ./chunk
 
 WORKDIR /app/metadata
 ENV CGO_ENABLED=1
-RUN go build -o /out/metadata ./cmd/metadata
+RUN for i in 1 2 3; do go build -o /out/metadata ./cmd/metadata && exit 0; sleep 2; done; exit 1
 
 WORKDIR /app/api
 ENV CGO_ENABLED=0
-RUN go build -o /out/api-service ./cmd/api-service
+RUN for i in 1 2 3; do go build -o /out/api-service ./cmd/api-service && exit 0; sleep 2; done; exit 1
 
 WORKDIR /app/chunk
 ENV CGO_ENABLED=0
-RUN go build -o /out/chunker ./cmd/chunker
+RUN for i in 1 2 3; do go build -o /out/chunker ./cmd/chunker && exit 0; sleep 2; done; exit 1
 
 FROM debian:bookworm-slim AS runtime-base
 
