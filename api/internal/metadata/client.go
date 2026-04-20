@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"sstorage/api/internal/model"
+	"istorage/api/internal/model"
 )
 
 type Client struct {
@@ -26,6 +26,7 @@ type placementRequest struct {
 type placement struct {
 	ChunkID string `json:"chunk_id"`
 	NodeID  string `json:"node_id"`
+	Zone    string `json:"zone"`
 	BaseURL string `json:"base_url"`
 }
 
@@ -107,27 +108,6 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, key string) (bool, er
 		return false, fmt.Errorf("metadata delete object failed: %s", res.Status)
 	}
 	return true, nil
-}
-
-func (c *Client) ChunkInUse(ctx context.Context, nodeID, chunkID string) (bool, error) {
-	u := fmt.Sprintf("%s/chunks/%s/%s/in-use", c.baseURL, url.PathEscape(nodeID), url.PathEscape(chunkID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return false, err
-	}
-	res, err := c.client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 300 {
-		return false, fmt.Errorf("metadata chunk in use failed: %s", res.Status)
-	}
-	var result model.ChunkInUseResult
-	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
-		return false, err
-	}
-	return result.InUse, nil
 }
 
 func (c *Client) ListBucketKeys(ctx context.Context, bucket string, limit *int, cursor *string) (model.ListBucketResponse, error) {
@@ -217,6 +197,7 @@ func (c *Client) PlaceChunks(ctx context.Context, chunkIDs []string) (map[string
 	for _, item := range response.Placements {
 		out[item.ChunkID] = model.ChunkerNode{
 			NodeID:  item.NodeID,
+			Zone:    item.Zone,
 			BaseURL: strings.TrimRight(item.BaseURL, "/"),
 			Healthy: true,
 		}

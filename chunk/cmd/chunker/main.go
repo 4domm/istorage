@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"syscall"
 
-	"sstorage/chunk/internal/config"
-	"sstorage/chunk/internal/httpapi"
-	"sstorage/chunk/internal/store"
+	"istorage/chunk/internal/config"
+	"istorage/chunk/internal/httpapi"
+	"istorage/chunk/internal/store"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 		Level: parseLogLevel(cfg.LogLevel),
 	}))
 
-	db, err := store.Open(cfg.DBPath)
+	db, err := store.Open(cfg.DBPath, cfg.SyncWrites)
 	if err != nil {
 		logger.Error("failed to open pebble", "path", cfg.DBPath, "error", err)
 		os.Exit(1)

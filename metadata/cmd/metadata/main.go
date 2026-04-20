@@ -10,12 +10,12 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 
-	"sstorage/metadata/internal/chunkers"
-	"sstorage/metadata/internal/config"
-	"sstorage/metadata/internal/gc"
-	"sstorage/metadata/internal/httpapi"
-	"sstorage/metadata/internal/service"
-	fdbstore "sstorage/metadata/internal/store/fdb"
+	"istorage/metadata/internal/chunkers"
+	"istorage/metadata/internal/config"
+	"istorage/metadata/internal/gc"
+	"istorage/metadata/internal/httpapi"
+	"istorage/metadata/internal/service"
+	fdbstore "istorage/metadata/internal/store/fdb"
 )
 
 func main() {
@@ -51,6 +51,7 @@ func main() {
 	for _, node := range cfg.ChunkerNodes {
 		nodes = append(nodes, chunkers.Node{
 			NodeID:  node.NodeID,
+			Zone:    node.Zone,
 			BaseURL: node.BaseURL,
 			Healthy: true,
 		})

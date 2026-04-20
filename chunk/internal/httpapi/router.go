@@ -3,11 +3,12 @@ package httpapi
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
-	"sstorage/chunk/internal/store"
+	"istorage/chunk/internal/store"
 )
 
 type Server struct {
@@ -17,6 +18,10 @@ type Server struct {
 
 type batchRequest struct {
 	ChunkIDs []string `json:"chunk_ids"`
+}
+
+type batchExistsResponse struct {
+	Missing []string `json:"missing"`
 }
 
 func New(store *store.Store, maxBodyBytes int64) *Server {
@@ -31,8 +36,12 @@ func (s *Server) Handler() http.Handler {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/health":
 			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/chunks/batch-put":
+			s.handleBatchPut(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/chunks/batch-get":
 			s.handleBatchGet(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/chunks/batch-exists":
+			s.handleBatchExists(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/chunks/batch-delete":
 			s.handleBatchDelete(w, r)
 		case strings.HasPrefix(r.URL.Path, "/chunks/"):
@@ -65,13 +74,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, chunkID strin
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	existed, err := s.store.PutIfAbsent(chunkID, data)
-	if err != nil {
+	if err := s.store.Put(chunkID, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if existed {
-		w.WriteHeader(http.StatusOK)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -107,35 +111,95 @@ func (s *Server) handleDelete(w http.ResponseWriter, _ *http.Request, chunkID st
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleBatchPut(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	count, err := readU32(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if count == 0 || count > 4096 {
+		http.Error(w, "invalid batch item count", http.StatusBadRequest)
+		return
+	}
+
+	items := make([]store.ChunkWrite, 0, int(count))
+	for i := uint32(0); i < count; i++ {
+		idLen, err := readU32(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if idLen == 0 || idLen > 1024 {
+			http.Error(w, "invalid chunk_id length", http.StatusBadRequest)
+			return
+		}
+		idBuf := make([]byte, idLen)
+		if _, err := io.ReadFull(r.Body, idBuf); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		chunkID := string(idBuf)
+		if err := validateChunkID(chunkID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		dataLen, err := readU64(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if dataLen > uint64(s.maxBodyBytes) {
+			http.Error(w, "chunk payload exceeds max_body_bytes", http.StatusBadRequest)
+			return
+		}
+		data := make([]byte, int(dataLen))
+		if _, err := io.ReadFull(r.Body, data); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		items = append(items, store.ChunkWrite{ChunkID: chunkID, Data: data})
+	}
+
+	if err := s.store.BatchPut(items); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
 func (s *Server) handleBatchGet(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeBatchRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	framed := make([]byte, 4)
-	binary.BigEndian.PutUint32(framed[:4], uint32(len(req.ChunkIDs)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+
+	if err := writeU32(w, uint32(len(req.ChunkIDs))); err != nil {
+		return
+	}
+
 	for _, chunkID := range req.ChunkIDs {
 		data, err := s.store.Get(chunkID)
 		if err != nil {
-			if err == store.ErrNotFound {
-				http.Error(w, "batch chunk not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		idLen := make([]byte, 4)
-		binary.BigEndian.PutUint32(idLen, uint32(len(chunkID)))
-		size := make([]byte, 8)
-		binary.BigEndian.PutUint64(size, uint64(len(data)))
-		framed = append(framed, idLen...)
-		framed = append(framed, []byte(chunkID)...)
-		framed = append(framed, size...)
-		framed = append(framed, data...)
+		if err := writeU32(w, uint32(len(chunkID))); err != nil {
+			return
+		}
+		if _, err := io.WriteString(w, chunkID); err != nil {
+			return
+		}
+		if err := writeU64(w, uint64(len(data))); err != nil {
+			return
+		}
+		if _, err := w.Write(data); err != nil {
+			return
+		}
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(framed)
 }
 
 func (s *Server) handleBatchDelete(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +213,22 @@ func (s *Server) handleBatchDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleBatchExists(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeBatchRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	missing, err := s.store.BatchMissing(req.ChunkIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(batchExistsResponse{Missing: missing})
 }
 
 func decodeBatchRequest(r *http.Request) (batchRequest, error) {
@@ -187,4 +267,34 @@ func errInvalid(message string) error {
 
 func ioReadAll(r io.Reader) ([]byte, error) {
 	return io.ReadAll(r)
+}
+
+func readU32(r io.Reader) (uint32, error) {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, fmt.Errorf("invalid batch framing")
+	}
+	return binary.BigEndian.Uint32(buf[:]), nil
+}
+
+func readU64(r io.Reader) (uint64, error) {
+	var buf [8]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, fmt.Errorf("invalid batch framing")
+	}
+	return binary.BigEndian.Uint64(buf[:]), nil
+}
+
+func writeU32(w io.Writer, value uint32) error {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], value)
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func writeU64(w io.Writer, value uint64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], value)
+	_, err := w.Write(buf[:])
+	return err
 }

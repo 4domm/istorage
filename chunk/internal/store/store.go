@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"sort"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -9,36 +10,33 @@ import (
 var ErrNotFound = errors.New("chunk not found")
 
 type Store struct {
-	db *pebble.DB
+	db       *pebble.DB
+	writeOpt *pebble.WriteOptions
 }
 
-func Open(path string) (*Store, error) {
+type ChunkWrite struct {
+	ChunkID string
+	Data    []byte
+}
+
+func Open(path string, syncWrites bool) (*Store, error) {
 	db, err := pebble.Open(path, &pebble.Options{})
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	writeOpt := pebble.NoSync
+	if syncWrites {
+		writeOpt = pebble.Sync
+	}
+	return &Store{db: db, writeOpt: writeOpt}, nil
 }
 
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) PutIfAbsent(chunkID string, data []byte) (bool, error) {
-	_, closer, err := s.db.Get([]byte(chunkID))
-	if err == nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return true, nil
-	}
-	if err != nil && !errors.Is(err, pebble.ErrNotFound) {
-		return false, err
-	}
-	if err := s.db.Set([]byte(chunkID), data, pebble.Sync); err != nil {
-		return false, err
-	}
-	return false, nil
+func (s *Store) Put(chunkID string, data []byte) error {
+	return s.db.Set([]byte(chunkID), data, s.writeOpt)
 }
 
 func (s *Store) Get(chunkID string) ([]byte, error) {
@@ -54,7 +52,57 @@ func (s *Store) Get(chunkID string) ([]byte, error) {
 }
 
 func (s *Store) Delete(chunkID string) error {
-	return s.db.Delete([]byte(chunkID), pebble.Sync)
+	return s.db.Delete([]byte(chunkID), s.writeOpt)
+}
+
+func (s *Store) Exists(chunkID string) (bool, error) {
+	_, closer, err := s.db.Get([]byte(chunkID))
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer closer.Close()
+	return true, nil
+}
+
+func (s *Store) BatchMissing(chunkIDs []string) ([]string, error) {
+	missingSet := make(map[string]struct{}, len(chunkIDs))
+	unique := make([]string, 0, len(chunkIDs))
+	for _, chunkID := range chunkIDs {
+		if _, ok := missingSet[chunkID]; ok {
+			continue
+		}
+		missingSet[chunkID] = struct{}{}
+		unique = append(unique, chunkID)
+	}
+	sort.Strings(unique)
+
+	iter, err := s.db.NewIter(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for _, chunkID := range unique {
+		ok := iter.SeekGE([]byte(chunkID))
+		if !ok || string(iter.Key()) != chunkID {
+			missingSet[chunkID] = struct{}{}
+		} else {
+			delete(missingSet, chunkID)
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+
+	missing := make([]string, 0, len(missingSet))
+	for chunkID := range missingSet {
+		missing = append(missing, chunkID)
+	}
+	sort.Strings(missing)
+	return missing, nil
 }
 
 func (s *Store) BatchDelete(chunkIDs []string) error {
@@ -65,5 +113,16 @@ func (s *Store) BatchDelete(chunkIDs []string) error {
 			return err
 		}
 	}
-	return batch.Commit(pebble.Sync)
+	return batch.Commit(s.writeOpt)
+}
+
+func (s *Store) BatchPut(items []ChunkWrite) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, item := range items {
+		if err := batch.Set([]byte(item.ChunkID), item.Data, nil); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(s.writeOpt)
 }

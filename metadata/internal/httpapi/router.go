@@ -13,9 +13,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"sstorage/metadata/internal/chunkers"
-	"sstorage/metadata/internal/model"
-	"sstorage/metadata/internal/service"
+	"istorage/metadata/internal/chunkers"
+	"istorage/metadata/internal/model"
+	"istorage/metadata/internal/service"
 )
 
 const (
@@ -40,7 +40,6 @@ func NewRouter(logger *slog.Logger, svc *service.Service, registry *chunkers.Reg
 		r.Delete("/*", deleteObject(svc))
 	})
 	r.Get("/buckets/{bucket}/objects", listBucket(svc))
-	r.Get("/chunks/{node_id}/{chunk_id}/in-use", chunkInUse(svc))
 	r.Get("/chunkers", listChunkers(registry))
 	r.Post("/placement", placement(registry))
 	return r
@@ -127,17 +126,6 @@ func listBucket(svc *service.Service) http.HandlerFunc {
 	}
 }
 
-func chunkInUse(svc *service.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		inUse, err := svc.ChunkInUse(r.Context(), chi.URLParam(r, "node_id"), chi.URLParam(r, "chunk_id"))
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, model.ChunkInUseResult{InUse: inUse})
-	}
-}
-
 func listChunkers(registry *chunkers.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		healthyOnly := r.URL.Query().Get("healthy_only") == "1" || strings.EqualFold(r.URL.Query().Get("healthy_only"), "true")
@@ -146,6 +134,7 @@ func listChunkers(registry *chunkers.Registry) http.HandlerFunc {
 		for _, node := range nodes {
 			out = append(out, model.ChunkerNode{
 				NodeID:  node.NodeID,
+				Zone:    node.Zone,
 				BaseURL: node.BaseURL,
 				Healthy: node.Healthy,
 			})
@@ -180,6 +169,7 @@ func placement(registry *chunkers.Registry) http.HandlerFunc {
 			out = append(out, model.Placement{
 				ChunkID: chunkID,
 				NodeID:  node.NodeID,
+				Zone:    node.Zone,
 				BaseURL: node.BaseURL,
 			})
 		}

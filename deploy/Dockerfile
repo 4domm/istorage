@@ -1,5 +1,3 @@
-FROM foundationdb/foundationdb:7.3.69 AS fdb-dist
-
 FROM golang:1.25-bookworm AS go-builder
 
 WORKDIR /app
@@ -13,12 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=fdb-dist /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
-RUN mkdir -p /usr/include/foundationdb \
-    && curl -fsSL "https://raw.githubusercontent.com/apple/foundationdb/${FDB_VERSION}/bindings/c/foundationdb/fdb_c.h" -o /usr/include/foundationdb/fdb_c.h \
-    && curl -fsSL "https://raw.githubusercontent.com/apple/foundationdb/${FDB_VERSION}/bindings/c/foundationdb/fdb.options" -o /usr/include/foundationdb/fdb.options
+RUN curl -fsSL "https://github.com/apple/foundationdb/releases/download/${FDB_VERSION}/foundationdb-clients_${FDB_VERSION}-1_amd64.deb" -o /tmp/foundationdb-clients.deb \
+    && dpkg -i /tmp/foundationdb-clients.deb \
+    && rm -f /tmp/foundationdb-clients.deb
 
-COPY config.docker.yaml ./config.docker.yaml
+COPY deploy/config.docker.yaml ./config.docker.yaml
 COPY metadata ./metadata
 COPY api ./api
 COPY chunk ./chunk
@@ -29,7 +26,7 @@ RUN for i in 1 2 3; do go build -o /out/metadata ./cmd/metadata && exit 0; sleep
 
 WORKDIR /app/api
 ENV CGO_ENABLED=0
-RUN for i in 1 2 3; do go build -o /out/api-service ./cmd/api-service && exit 0; sleep 2; done; exit 1
+RUN for i in 1 2 3; do go build -o /out/api ./cmd/api && exit 0; sleep 2; done; exit 1
 
 WORKDIR /app/chunk
 ENV CGO_ENABLED=0
@@ -47,14 +44,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 FROM runtime-base AS api-service
-COPY --from=go-builder /out/api-service /usr/local/bin/api-service
+COPY --from=go-builder /out/api /usr/local/bin/api
 COPY --from=go-builder /app/config.docker.yaml /app/config.docker.yaml
 ENV CONFIG_PATH=/app/config.docker.yaml
 EXPOSE 3000
-CMD ["api-service"]
+CMD ["api"]
 
 FROM runtime-base AS metadata-service
-COPY --from=fdb-dist /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
+COPY --from=go-builder /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
 COPY --from=go-builder /out/metadata /usr/local/bin/metadata
 EXPOSE 3001
 CMD ["metadata"]
