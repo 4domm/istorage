@@ -10,6 +10,7 @@ type Config struct {
 	Port         int
 	DBPath       string
 	MaxBodyBytes int64
+	SyncWrites   bool
 	LogLevel     string
 }
 
@@ -31,6 +32,7 @@ func Load() Config {
 		Port:         envInt("CHUNK_PORT", 3002),
 		DBPath:       envString("CHUNK_DB_PATH", "./data/chunks"),
 		MaxBodyBytes: maxBodyBytes,
+		SyncWrites:   envBool("CHUNK_SYNC_WRITES", false),
 		LogLevel:     envString("CHUNKER_LOG_FILTER", "info"),
 	}
 }
@@ -70,4 +72,19 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }

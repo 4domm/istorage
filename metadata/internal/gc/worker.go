@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"sstorage/metadata/internal/chunk"
-	"sstorage/metadata/internal/chunkers"
-	"sstorage/metadata/internal/service"
+	"istorage/metadata/internal/chunk"
+	"istorage/metadata/internal/chunkers"
+	"istorage/metadata/internal/service"
 )
 
 const (

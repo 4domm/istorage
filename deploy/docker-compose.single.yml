@@ -23,22 +23,27 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-lc"]
     command: >
-      "for i in $(seq 1 30); do
-         fdbcli --exec 'configure new single memory; status' && exit 0;
+      "mkdir -p /var/fdb;
+       ip=$$(getent ahostsv4 foundationdb | awk 'NR==1{print $$1; exit}');
+       test -n \"$$ip\";
+       printf 'docker:docker@%s:4500\n' \"$$ip\" > /var/fdb/fdb.cluster;
+       for i in $(seq 1 30); do
+         fdbcli -C /var/fdb/fdb.cluster --exec 'configure new single memory; status' && exit 0;
          sleep 2;
        done;
        exit 1"
 
   metadata:
     build:
-      context: .
+      context: ..
+      dockerfile: deploy/Dockerfile
       target: metadata-service
     environment:
       LOG_LEVEL: info
       FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
       FDB_API_VERSION: 730
       METADATA_GC_BATCH_SIZE: 128
-      CHUNKER_NODES: chunker-a=http://chunker-a:3002,chunker-b=http://chunker-b:3002
+      CHUNKER_NODES: chunker-a@zone-a=http://chunker-a:3002,chunker-b@zone-b=http://chunker-b:3002
       CHUNKER_HEALTHCHECK_INTERVAL_MS: 2000
     depends_on:
       foundationdb-init:
@@ -48,7 +53,8 @@ services:
 
   chunker-a:
     build:
-      context: .
+      context: ..
+      dockerfile: deploy/Dockerfile
       target: chunker-service
     environment:
       CHUNKER_LOG_FILTER: chunker=info,tower_http=info
@@ -60,7 +66,8 @@ services:
 
   chunker-b:
     build:
-      context: .
+      context: ..
+      dockerfile: deploy/Dockerfile
       target: chunker-service
     environment:
       CHUNKER_LOG_FILTER: chunker=info,tower_http=info
@@ -72,11 +79,16 @@ services:
 
   api-service:
     build:
-      context: .
+      context: ..
+      dockerfile: deploy/Dockerfile
       target: api-service
     environment:
       API_SERVICE_LOG_FILTER: api_service=info,tower_http=info
+      API_SERVICE_ADDR: 0.0.0.0:3000
+      METADATA_SERVICE_URL: http://metadata:3001
       API_GET_BATCH_WINDOW: 16
+      API_EC_DATA_SHARDS: 1
+      API_EC_PARITY_SHARDS: 0
     depends_on:
       - metadata
       - chunker-a

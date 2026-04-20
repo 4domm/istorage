@@ -23,6 +23,7 @@ type Config struct {
 
 type ChunkerNode struct {
 	NodeID  string
+	Zone    string
 	BaseURL string
 }
 
@@ -74,16 +75,25 @@ func parseChunkerNodes(raw string) ([]ChunkerNode, error) {
 		if entry == "" {
 			continue
 		}
-		nodeID, baseURL, ok := strings.Cut(entry, "=")
+		left, baseURL, ok := strings.Cut(entry, "=")
 		if !ok {
 			return nil, fmt.Errorf("invalid CHUNKER_NODES entry: %s", entry)
 		}
-		nodeID = strings.TrimSpace(nodeID)
+		left = strings.TrimSpace(left)
 		baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		nodeID := left
+		zone := ""
+		if parsedNodeID, parsedZone, hasZone := strings.Cut(left, "@"); hasZone {
+			nodeID = strings.TrimSpace(parsedNodeID)
+			zone = strings.TrimSpace(parsedZone)
+		}
+		if zone == "" {
+			zone = nodeID
+		}
 		if nodeID == "" || baseURL == "" {
 			return nil, fmt.Errorf("invalid CHUNKER_NODES entry: %s", entry)
 		}
-		out = append(out, ChunkerNode{NodeID: nodeID, BaseURL: baseURL})
+		out = append(out, ChunkerNode{NodeID: nodeID, Zone: zone, BaseURL: baseURL})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("CHUNKER_NODES must contain at least one node")

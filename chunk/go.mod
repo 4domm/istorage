@@ -1,4 +1,4 @@
-module sstorage/chunk
+module istorage/chunk
 
 go 1.24
 

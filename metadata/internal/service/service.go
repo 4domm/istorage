@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"sstorage/metadata/internal/model"
-	fdbstore "sstorage/metadata/internal/store/fdb"
+	"istorage/metadata/internal/model"
+	fdbstore "istorage/metadata/internal/store/fdb"
 )
 
 type Store interface {
@@ -13,7 +13,6 @@ type Store interface {
 	GetObject(ctx context.Context, bucket, key string) (*model.ObjectMeta, error)
 	DeleteObject(ctx context.Context, bucket, key string) (bool, error)
 	ListBucketKeys(ctx context.Context, bucket string, limit int, cursor string) ([]string, *string, error)
-	ChunkInUse(ctx context.Context, nodeID, chunkID string) (bool, error)
 	GCNextBatch(ctx context.Context, limit int, owner string, lease time.Duration) ([]model.GcTask, error)
 	GCAckBatch(ctx context.Context, owner string, seqs []uint64) (uint64, error)
 }
@@ -40,10 +39,6 @@ func (s *Service) DeleteObject(ctx context.Context, bucket, key string) (bool, e
 
 func (s *Service) ListBucketKeys(ctx context.Context, bucket string, limit int, cursor string) ([]string, *string, error) {
 	return s.store.ListBucketKeys(ctx, bucket, limit, cursor)
-}
-
-func (s *Service) ChunkInUse(ctx context.Context, nodeID, chunkID string) (bool, error) {
-	return s.store.ChunkInUse(ctx, nodeID, chunkID)
 }
 
 func (s *Service) GCNextBatch(ctx context.Context, limit int, owner string, lease time.Duration) ([]model.GcTask, error) {

@@ -5,12 +5,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 
-	"sstorage/metadata/internal/model"
+	"istorage/metadata/internal/model"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -18,7 +17,6 @@ var ErrNotFound = errors.New("not found")
 var (
 	objectsPrefix       = []byte("objects\x00")
 	bucketObjectsPrefix = []byte("bucket_objects\x00")
-	refcountsPrefix     = []byte("refcounts\x00")
 	gcQueuePrefix       = []byte("gc_queue\x00")
 	gcSeqKey            = fdb.Key("meta\x00gc_seq")
 )
@@ -70,13 +68,13 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, body model.Pu
 			return nil, err
 		}
 
-		oldCounts := map[chunkKey]uint64{}
+		oldChunks := make([]chunkKey, 0)
 		if len(oldRaw) > 0 {
 			var oldMeta model.ObjectMeta
 			if err := json.Unmarshal(oldRaw, &oldMeta); err != nil {
-				return nil, fmt.Errorf("decode old object: %w", err)
+				return nil, err
 			}
-			oldCounts = manifestCounts(oldMeta.Manifest)
+			oldChunks = manifestToChunkKeys(oldMeta.Manifest)
 		}
 
 		newMeta := model.ObjectMeta{
@@ -91,13 +89,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, body model.Pu
 
 		tr.Set(objectKey, encoded)
 		tr.Set(bucketObjectKey(bucket, key), []byte{1})
-
-		deltas := diffManifestCounts(oldCounts, manifestCounts(body.Manifest))
-		orphanChunks, err := applyRefcountDeltas(tr, deltas)
-		if err != nil {
-			return nil, err
-		}
-		if err := enqueueGCTasks(tr, orphanChunks); err != nil {
+		if err := enqueueGCTasks(tr, oldChunks); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -158,16 +150,7 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, err
 
 		tr.Clear(objectMetaKey(bucket, key))
 		tr.Clear(bucketObjectKey(bucket, key))
-
-		deltas := map[chunkKey]int64{}
-		for chunk, count := range manifestCounts(meta.Manifest) {
-			deltas[chunk] = -int64(count)
-		}
-		orphanChunks, err := applyRefcountDeltas(tr, deltas)
-		if err != nil {
-			return nil, err
-		}
-		if err := enqueueGCTasks(tr, orphanChunks); err != nil {
+		if err := enqueueGCTasks(tr, manifestToChunkKeys(meta.Manifest)); err != nil {
 			return nil, err
 		}
 		return true, nil
@@ -221,27 +204,10 @@ func (s *Store) ListBucketKeys(ctx context.Context, bucket string, limit int, cu
 	return result.keys, result.nextCursor, nil
 }
 
-func (s *Store) ChunkInUse(ctx context.Context, nodeID, chunkID string) (bool, error) {
-	value, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		raw, err := tr.Get(refcountKey(nodeID, chunkID)).Get()
-		if err != nil {
-			return nil, err
-		}
-		return len(raw) > 0 && decodeUint64(raw) > 0, nil
-	})
-	if err != nil {
-		return false, err
-	}
-	return value.(bool), nil
-}
-
 func (s *Store) GCNextBatch(ctx context.Context, limit int, owner string, lease time.Duration) ([]model.GcTask, error) {
+	if limit < 1 {
+		return []model.GcTask{}, nil
+	}
 	value, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		select {
 		case <-ctx.Done():
@@ -251,40 +217,57 @@ func (s *Store) GCNextBatch(ctx context.Context, limit int, owner string, lease 
 
 		now := time.Now().UnixMilli()
 		leaseUntil := now + lease.Milliseconds()
-		gcRange, err := fdb.PrefixRange(gcQueuePrefix)
-		if err != nil {
-			return nil, err
-		}
-		rows, err := tr.GetRange(gcRange, fdb.RangeOptions{}).GetSliceWithError()
-		if err != nil {
-			return nil, err
-		}
 
 		tasks := make([]model.GcTask, 0, limit)
-		for _, row := range rows {
-			if len(tasks) == limit {
-				break
-			}
-			var entry gcEntry
-			if err := json.Unmarshal(row.Value, &entry); err != nil {
-				return nil, err
-			}
-			if entry.ClaimedBy != "" && entry.ClaimedBy != owner && entry.ClaimedUntilMS >= now {
-				continue
-			}
+		begin := append([]byte{}, gcQueuePrefix...)
+		end := prefixEnd(gcQueuePrefix)
+		pageLimit := limit * 4
+		if pageLimit < 64 {
+			pageLimit = 64
+		}
 
-			entry.ClaimedBy = owner
-			entry.ClaimedUntilMS = leaseUntil
-			encoded, err := json.Marshal(entry)
+		for len(tasks) < limit {
+			rows, err := tr.GetRange(fdb.KeyRange{
+				Begin: fdb.Key(begin),
+				End:   fdb.Key(end),
+			}, fdb.RangeOptions{Limit: pageLimit}).GetSliceWithError()
 			if err != nil {
 				return nil, err
 			}
-			tr.Set(row.Key, encoded)
-			tasks = append(tasks, model.GcTask{
-				Seq:     entry.Seq,
-				ChunkID: entry.ChunkID,
-				NodeID:  entry.NodeID,
-			})
+			if len(rows) == 0 {
+				break
+			}
+			for _, row := range rows {
+				if len(tasks) == limit {
+					break
+				}
+				var entry gcEntry
+				if err := json.Unmarshal(row.Value, &entry); err != nil {
+					return nil, err
+				}
+				if entry.ClaimedBy != "" && entry.ClaimedBy != owner && entry.ClaimedUntilMS >= now {
+					continue
+				}
+
+				entry.ClaimedBy = owner
+				entry.ClaimedUntilMS = leaseUntil
+				encoded, err := json.Marshal(entry)
+				if err != nil {
+					return nil, err
+				}
+				tr.Set(row.Key, encoded)
+				tasks = append(tasks, model.GcTask{
+					Seq:     entry.Seq,
+					ChunkID: entry.ChunkID,
+					NodeID:  entry.NodeID,
+				})
+			}
+
+			lastKey := rows[len(rows)-1].Key
+			begin = append(append([]byte{}, lastKey...), 0x00)
+			if len(rows) < pageLimit {
+				break
+			}
 		}
 		return tasks, nil
 	})
@@ -295,6 +278,9 @@ func (s *Store) GCNextBatch(ctx context.Context, limit int, owner string, lease 
 }
 
 func (s *Store) GCAckBatch(ctx context.Context, owner string, seqs []uint64) (uint64, error) {
+	if len(seqs) == 0 {
+		return 0, nil
+	}
 	value, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		select {
 		case <-ctx.Done():
@@ -302,24 +288,44 @@ func (s *Store) GCAckBatch(ctx context.Context, owner string, seqs []uint64) (ui
 		default:
 		}
 
-		var acked uint64
+		minSeq := seqs[0]
+		maxSeq := seqs[0]
+		seqSet := make(map[uint64]struct{}, len(seqs))
 		for _, seq := range seqs {
-			key := gcQueueKey(seq)
-			raw, err := tr.Get(key).Get()
-			if err != nil {
-				return nil, err
+			seqSet[seq] = struct{}{}
+			if seq < minSeq {
+				minSeq = seq
 			}
-			if len(raw) == 0 {
-				continue
+			if seq > maxSeq {
+				maxSeq = seq
 			}
+		}
+
+		endKey := gcQueueKey(maxSeq + 1)
+		if maxSeq == ^uint64(0) {
+			endKey = fdb.Key(prefixEnd(gcQueuePrefix))
+		}
+		rows, err := tr.GetRange(fdb.KeyRange{
+			Begin: gcQueueKey(minSeq),
+			End:   endKey,
+		}, fdb.RangeOptions{}).GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+
+		var acked uint64
+		for _, row := range rows {
 			var entry gcEntry
-			if err := json.Unmarshal(raw, &entry); err != nil {
+			if err := json.Unmarshal(row.Value, &entry); err != nil {
 				return nil, err
+			}
+			if _, ok := seqSet[entry.Seq]; !ok {
+				continue
 			}
 			if entry.ClaimedBy != owner {
 				continue
 			}
-			tr.Clear(key)
+			tr.Clear(row.Key)
 			acked++
 		}
 		return acked, nil
@@ -335,48 +341,20 @@ type listBucketResult struct {
 	nextCursor *string
 }
 
-func manifestCounts(manifest []model.ChunkRef) map[chunkKey]uint64 {
-	counts := make(map[chunkKey]uint64, len(manifest))
+func manifestToChunkKeys(manifest []model.ChunkRef) []chunkKey {
+	out := make([]chunkKey, 0, len(manifest))
 	for _, chunk := range manifest {
-		counts[chunkKey{nodeID: chunk.NodeID, chunkID: chunk.ChunkID}]++
-	}
-	return counts
-}
-
-func diffManifestCounts(oldCounts, newCounts map[chunkKey]uint64) map[chunkKey]int64 {
-	deltas := make(map[chunkKey]int64, len(oldCounts)+len(newCounts))
-	for chunk, count := range oldCounts {
-		deltas[chunk] -= int64(count)
-	}
-	for chunk, count := range newCounts {
-		deltas[chunk] += int64(count)
-	}
-	return deltas
-}
-
-func applyRefcountDeltas(tr fdb.Transaction, deltas map[chunkKey]int64) ([]chunkKey, error) {
-	var orphanChunks []chunkKey
-	for chunk, delta := range deltas {
-		if delta == 0 {
-			continue
-		}
-		key := refcountKey(chunk.nodeID, chunk.chunkID)
-		currentRaw, err := tr.Get(key).Get()
-		if err != nil {
-			return nil, err
-		}
-		current := int64(decodeUint64(currentRaw))
-		next := current + delta
-		if next <= 0 {
-			tr.Clear(key)
-			if current > 0 {
-				orphanChunks = append(orphanChunks, chunk)
+		if len(chunk.Shards) == 0 {
+			if chunk.NodeID != "" && chunk.ChunkID != "" {
+				out = append(out, chunkKey{nodeID: chunk.NodeID, chunkID: chunk.ChunkID})
 			}
 			continue
 		}
-		tr.Set(key, encodeUint64(uint64(next)))
+		for _, shard := range chunk.Shards {
+			out = append(out, chunkKey{nodeID: shard.NodeID, chunkID: shard.ChunkID})
+		}
 	}
-	return orphanChunks, nil
+	return out
 }
 
 func enqueueGCTasks(tr fdb.Transaction, chunks []chunkKey) error {
@@ -424,10 +402,6 @@ func bucketListingPrefix(bucket string) []byte {
 
 func bucketObjectKey(bucket, key string) fdb.Key {
 	return fdb.Key(appendKey(bucketObjectsPrefix, bucket, key))
-}
-
-func refcountKey(nodeID, chunkID string) fdb.Key {
-	return fdb.Key(appendKey(refcountsPrefix, nodeID, chunkID))
 }
 
 func gcQueueKey(seq uint64) fdb.Key {

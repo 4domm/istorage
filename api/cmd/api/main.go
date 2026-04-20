@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"istorage/api/internal/api"
+	"istorage/api/internal/config"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"sstorage/api/internal/api"
-	"sstorage/api/internal/config"
 	"syscall"
 )
 
