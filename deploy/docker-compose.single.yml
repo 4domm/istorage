@@ -16,22 +16,24 @@ services:
 
   foundationdb-init:
     image: foundationdb/foundationdb:7.3.69
-    environment:
-      FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
     depends_on:
       foundationdb:
         condition: service_healthy
-    entrypoint: ["/bin/bash", "-lc"]
-    command: >
-      "mkdir -p /var/fdb;
-       ip=$$(getent ahostsv4 foundationdb | awk 'NR==1{print $$1; exit}');
-       test -n \"$$ip\";
-       printf 'docker:docker@%s:4500\n' \"$$ip\" > /var/fdb/fdb.cluster;
-       for i in $(seq 1 30); do
-         fdbcli -C /var/fdb/fdb.cluster --exec 'configure new single memory; status' && exit 0;
-         sleep 2;
-       done;
-       exit 1"
+    network_mode: "service:foundationdb"
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+          set -euo pipefail
+          mkdir -p /var/fdb
+          cat > /var/fdb/fdb.cluster <<'EOF'
+          docker:docker@127.0.0.1:4500
+          EOF
+          for i in $(seq 1 30); do
+            fdbcli -C /var/fdb/fdb.cluster --exec "configure new single memory; status" && exit 0
+            sleep 2
+          done
+          exit 1
 
   metadata:
     build:
@@ -45,6 +47,13 @@ services:
       METADATA_GC_BATCH_SIZE: 128
       CHUNKER_NODES: chunker-a@zone-a=http://chunker-a:3002,chunker-b@zone-b=http://chunker-b:3002
       CHUNKER_HEALTHCHECK_INTERVAL_MS: 2000
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - |
+          ip=$$(getent ahostsv4 foundationdb | awk 'NR==1{print $$1; exit}')
+          export FDB_CLUSTER_FILE_CONTENTS="docker:docker@$${ip}:4500"
+          exec metadata
     depends_on:
       foundationdb-init:
         condition: service_completed_successfully

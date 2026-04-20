@@ -42,7 +42,6 @@ def object_url() -> str:
 
 def main() -> None:
     url = object_url()
-    # > 2 MiB so requests can cross chunk boundaries for default 1 MiB chunk size.
     payload = bytes((i % 251 for i in range(2 * 1024 * 1024 + 12345)))
     size = len(payload)
 

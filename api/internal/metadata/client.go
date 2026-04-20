@@ -44,7 +44,12 @@ func New(baseURL string) *Client {
 }
 
 func (c *Client) objectURL(bucket, key string) string {
-	return fmt.Sprintf("%s/objects/%s/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
+	parts := strings.Split(key, "/")
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, url.PathEscape(part))
+	}
+	return fmt.Sprintf("%s/objects/%s/%s", c.baseURL, url.PathEscape(bucket), strings.Join(escaped, "/"))
 }
 
 func (c *Client) PutObject(ctx context.Context, bucket, key string, body model.PutObjectRequest) error {

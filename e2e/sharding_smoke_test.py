@@ -2,6 +2,7 @@
 
 import json
 import os
+import urllib.parse
 import urllib.error
 import urllib.request
 
@@ -31,7 +32,8 @@ def assert_status(actual: int, expected: tuple[int, ...], action: str) -> None:
 def main() -> None:
     source_payload = os.urandom(FILE_SIZE_BYTES)
     object_url = f"{API_URL}/{BUCKET}/{KEY}"
-    metadata_url = f"{METADATA_URL}/objects/{BUCKET}/{KEY}"
+    encoded_key = urllib.parse.quote(KEY, safe="")
+    metadata_url = f"{METADATA_URL}/objects/{BUCKET}/{encoded_key}"
 
     print(f"Uploading {FILE_SIZE_BYTES} bytes to {object_url}")
     status, _ = request("PUT", object_url, source_payload)
@@ -47,6 +49,15 @@ def main() -> None:
 
     counts: dict[str, int] = {}
     for chunk_ref in manifest:
+        shard_refs = chunk_ref.get("shards") or []
+        if shard_refs:
+            for shard in shard_refs:
+                node_id = shard.get("node_id")
+                if not node_id:
+                    raise SystemExit(f"Shard entry missing node_id: {shard}")
+                counts[node_id] = counts.get(node_id, 0) + 1
+            continue
+
         node_id = chunk_ref.get("node_id")
         if not node_id:
             raise SystemExit(f"Manifest entry missing node_id: {chunk_ref}")
