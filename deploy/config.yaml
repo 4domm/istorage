@@ -2,4 +2,4 @@ api_service_addr: "0.0.0.0:3000"
 metadata_service_url: "http://127.0.0.1:3001"
 chunk_size: 1048576
 get_batch_window: 16
-gc_batch_size: 128
+put_placement_batch_size: 64

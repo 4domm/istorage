@@ -26,15 +26,15 @@ import (
 )
 
 const (
-	putUploadConcurrency  = 16
-	putPlacementBatchSize = 32
+	putUploadConcurrency = 16
 )
 
 type Server struct {
-	cfg      config.Config
-	logger   *slog.Logger
-	metadata *metadata.Client
-	chunk    *chunk.Client
+	cfg          config.Config
+	logger       *slog.Logger
+	metadata     *metadata.Client
+	chunk        *chunk.Client
+	chunkBufPool sync.Pool
 }
 
 type uploadResult struct {
@@ -55,6 +55,7 @@ type pendingChunkUpload struct {
 	dataShards   int
 	parityShards int
 	shards       []pendingShardUpload
+	pooledData   []byte
 }
 
 type chunkIDGenerator struct {
@@ -77,11 +78,17 @@ func (g *chunkIDGenerator) Next() string {
 }
 
 func New(cfg config.Config, logger *slog.Logger) *Server {
+	pool := sync.Pool{
+		New: func() any {
+			return make([]byte, cfg.ChunkSize)
+		},
+	}
 	return &Server{
-		cfg:      cfg,
-		logger:   logger,
-		metadata: metadata.New(cfg.MetadataServiceURL),
-		chunk:    chunk.New(),
+		cfg:          cfg,
+		logger:       logger,
+		metadata:     metadata.New(cfg.MetadataServiceURL),
+		chunk:        chunk.New(),
+		chunkBufPool: pool,
 	}
 }
 
@@ -144,8 +151,13 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	reader := r.Body
 	defer reader.Close()
 
+	placementBatchSize := s.cfg.PutPlacementBatchSize
+	if placementBatchSize < 1 {
+		placementBatchSize = 32
+	}
+
 	manifest := make([]model.ChunkRef, 0)
-	pending := make([]pendingChunkUpload, 0, putPlacementBatchSize)
+	pending := make([]pendingChunkUpload, 0, placementBatchSize)
 	uploadedChunks := make([][2]string, 0)
 	results := make(chan uploadResult, putUploadConcurrency)
 	sem := make(chan struct{}, putUploadConcurrency)
@@ -176,9 +188,11 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		}
 		if readErr == io.ErrUnexpectedEOF && n > 0 {
 			hasher.Write(buf[:n])
-			chunkData := append([]byte(nil), buf[:n]...)
+			chunkData := s.acquireChunkBuffer(n)
+			copy(chunkData, buf[:n])
 			pendingUpload, prepareErr := s.prepareChunkUpload(chunkData, offset, idGen)
 			if prepareErr != nil {
+				s.releaseChunkBuffer(chunkData)
 				recordErr(prepareErr)
 			} else {
 				pending = append(pending, pendingUpload)
@@ -191,15 +205,17 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 			return
 		}
 		hasher.Write(buf[:n])
-		chunkData := append([]byte(nil), buf[:n]...)
+		chunkData := s.acquireChunkBuffer(n)
+		copy(chunkData, buf[:n])
 		pendingUpload, prepareErr := s.prepareChunkUpload(chunkData, offset, idGen)
 		if prepareErr != nil {
+			s.releaseChunkBuffer(chunkData)
 			recordErr(prepareErr)
 			break
 		}
 		pending = append(pending, pendingUpload)
 		offset += uint64(n)
-		if len(pending) >= putPlacementBatchSize {
+		if len(pending) >= placementBatchSize {
 			refs, dispatchErr := s.dispatchUploadBatch(ctx, pending, &wg, sem, results)
 			if dispatchErr != nil {
 				recordErr(dispatchErr)
@@ -233,6 +249,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 
 	if firstErr != nil {
+		s.releasePendingPooledBuffers(pending)
 		s.rollbackNewChunks(ctx, uploadedChunks)
 		apierrors.Write(w, apierrors.Internal(firstErr.Error()))
 		return
@@ -264,6 +281,12 @@ func (s *Server) prepareChunkUpload(
 	if err != nil {
 		return pendingChunkUpload{}, err
 	}
+	pooledData := []byte(nil)
+	if dataShards == 1 && parityShards == 0 {
+		pooledData = chunkData
+	} else {
+		s.releaseChunkBuffer(chunkData)
+	}
 	pendingShards := make([]pendingShardUpload, 0, len(shards))
 	for _, shard := range shards {
 		pendingShards = append(pendingShards, pendingShardUpload{
@@ -278,6 +301,7 @@ func (s *Server) prepareChunkUpload(
 		dataShards:   dataShards,
 		parityShards: parityShards,
 		shards:       pendingShards,
+		pooledData:   pooledData,
 	}, nil
 }
 
@@ -303,6 +327,7 @@ func (s *Server) dispatchUploadBatch(
 	type nodeBatch struct {
 		baseURL string
 		chunks  map[string][]byte
+		pooled  [][]byte
 	}
 	byNode := make(map[string]*nodeBatch)
 	for _, upload := range pending {
@@ -328,10 +353,20 @@ func (s *Server) dispatchUploadBatch(
 				batch = &nodeBatch{
 					baseURL: node.BaseURL,
 					chunks:  make(map[string][]byte),
+					pooled:  make([][]byte, 0),
 				}
 				byNode[node.NodeID] = batch
 			}
 			batch.chunks[shard.chunkID] = shard.data
+		}
+		if upload.pooledData != nil && len(upload.shards) > 0 {
+			firstNode, ok := placements[upload.shards[0].chunkID]
+			if ok {
+				batch := byNode[firstNode.NodeID]
+				if batch != nil {
+					batch.pooled = append(batch.pooled, upload.pooledData)
+				}
+			}
 		}
 		refs = append(refs, ref)
 	}
@@ -344,6 +379,11 @@ func (s *Server) dispatchUploadBatch(
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer func() {
+				for _, buf := range batch.pooled {
+					s.releaseChunkBuffer(buf)
+				}
+			}()
 			err := s.chunk.BatchPutChunks(ctx, batch.baseURL, batch.chunks)
 			for chunkID := range batch.chunks {
 				results <- uploadResult{nodeID: nodeID, chunkID: chunkID, err: err}
@@ -704,6 +744,35 @@ func etagMatches(headerValue, objectETag string) bool {
 	return false
 }
 
+func (s *Server) acquireChunkBuffer(size int) []byte {
+	if size <= 0 {
+		return nil
+	}
+	if size > s.cfg.ChunkSize {
+		return make([]byte, size)
+	}
+	buf := s.chunkBufPool.Get().([]byte)
+	return buf[:size]
+}
+
+func (s *Server) releaseChunkBuffer(buf []byte) {
+	if buf == nil {
+		return
+	}
+	if cap(buf) != s.cfg.ChunkSize {
+		return
+	}
+	s.chunkBufPool.Put(buf[:s.cfg.ChunkSize])
+}
+
+func (s *Server) releasePendingPooledBuffers(pending []pendingChunkUpload) {
+	for _, upload := range pending {
+		if upload.pooledData != nil {
+			s.releaseChunkBuffer(upload.pooledData)
+		}
+	}
+}
+
 type parsedByteRange struct {
 	start uint64
 	end   uint64
@@ -781,7 +850,7 @@ func (s *Server) normalizedECParams() (int, int) {
 
 func (s *Server) encodeChunkShards(chunkData []byte, dataShards, parityShards int) ([]shardPayload, error) {
 	if dataShards == 1 && parityShards == 0 {
-		return []shardPayload{{chunkID: "", shardIndex: 0, data: append([]byte(nil), chunkData...)}}, nil
+		return []shardPayload{{chunkID: "", shardIndex: 0, data: chunkData}}, nil
 	}
 	enc, err := reedsolomon.New(dataShards, parityShards)
 	if err != nil {
@@ -835,18 +904,6 @@ func (s *Server) readChunkPayload(
 	parityShards := chunkRef.ParityShards
 	if parityShards < 0 {
 		parityShards = 0
-	}
-
-	if len(shards) == 1 && dataShards == 1 && parityShards == 0 {
-		baseURL, ok := nodeMap[shards[0].NodeID]
-		if !ok {
-			return nil, fmt.Errorf("missing chunker node %s", shards[0].NodeID)
-		}
-		payload, err := s.chunk.GetChunk(ctx, baseURL, shards[0].ChunkID)
-		if err != nil {
-			return nil, err
-		}
-		return payload, nil
 	}
 
 	totalShards := len(shards)

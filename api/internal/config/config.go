@@ -9,13 +9,14 @@ import (
 )
 
 type Config struct {
-	APIServiceAddr     string
-	MetadataServiceURL string
-	ChunkSize          int
-	GetBatchWindow     int
-	ECDataShards       int
-	ECParityShards     int
-	LogLevel           string
+	APIServiceAddr        string
+	MetadataServiceURL    string
+	ChunkSize             int
+	GetBatchWindow        int
+	PutPlacementBatchSize int
+	ECDataShards          int
+	ECParityShards        int
+	LogLevel              string
 }
 
 func Load() (Config, error) {
@@ -32,13 +33,14 @@ func Load() (Config, error) {
 
 func defaultConfig() Config {
 	return Config{
-		APIServiceAddr:     "0.0.0.0:3000",
-		MetadataServiceURL: "http://127.0.0.1:3001",
-		ChunkSize:          1024 * 1024,
-		GetBatchWindow:     16,
-		ECDataShards:       1,
-		ECParityShards:     0,
-		LogLevel:           envString("LOG_LEVEL", "info"),
+		APIServiceAddr:        "0.0.0.0:3000",
+		MetadataServiceURL:    "http://127.0.0.1:3001",
+		ChunkSize:             1024 * 1024,
+		GetBatchWindow:        16,
+		PutPlacementBatchSize: 32,
+		ECDataShards:          1,
+		ECParityShards:        0,
+		LogLevel:              envString("LOG_LEVEL", "info"),
 	}
 }
 
@@ -67,6 +69,10 @@ func applySimpleYAML(cfg *Config, raw string) {
 			if v, err := strconv.Atoi(value); err == nil {
 				cfg.GetBatchWindow = v
 			}
+		case "put_placement_batch_size":
+			if v, err := strconv.Atoi(value); err == nil {
+				cfg.PutPlacementBatchSize = v
+			}
 		case "ec_data_shards":
 			if v, err := strconv.Atoi(value); err == nil {
 				cfg.ECDataShards = v
@@ -83,6 +89,11 @@ func applyEnvOverrides(cfg *Config) {
 	if value := os.Getenv("API_GET_BATCH_WINDOW"); value != "" {
 		if v, err := strconv.Atoi(value); err == nil {
 			cfg.GetBatchWindow = v
+		}
+	}
+	if value := os.Getenv("API_PUT_PLACEMENT_BATCH_SIZE"); value != "" {
+		if v, err := strconv.Atoi(value); err == nil {
+			cfg.PutPlacementBatchSize = v
 		}
 	}
 	if value := os.Getenv("API_SERVICE_ADDR"); value != "" {

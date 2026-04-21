@@ -70,8 +70,8 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, body model.Pu
 
 		oldChunks := make([]chunkKey, 0)
 		if len(oldRaw) > 0 {
-			var oldMeta model.ObjectMeta
-			if err := json.Unmarshal(oldRaw, &oldMeta); err != nil {
+			oldMeta, err := decodeStoredMeta(oldRaw)
+			if err != nil {
 				return nil, err
 			}
 			oldChunks = manifestToChunkKeys(oldMeta.Manifest)
@@ -82,7 +82,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, body model.Pu
 			ETag:     body.ETag,
 			Manifest: body.Manifest,
 		}
-		encoded, err := json.Marshal(newMeta)
+		encoded, err := encodeStoredMeta(newMeta)
 		if err != nil {
 			return nil, err
 		}
@@ -112,8 +112,8 @@ func (s *Store) GetObject(ctx context.Context, bucket, key string) (*model.Objec
 		if len(raw) == 0 {
 			return nil, nil
 		}
-		var meta model.ObjectMeta
-		if err := json.Unmarshal(raw, &meta); err != nil {
+		meta, err := decodeStoredMeta(raw)
+		if err != nil {
 			return nil, err
 		}
 		return &meta, nil
@@ -143,8 +143,8 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, err
 			return false, nil
 		}
 
-		var meta model.ObjectMeta
-		if err := json.Unmarshal(raw, &meta); err != nil {
+		meta, err := decodeStoredMeta(raw)
+		if err != nil {
 			return nil, err
 		}
 
@@ -339,6 +339,97 @@ func (s *Store) GCAckBatch(ctx context.Context, owner string, seqs []uint64) (ui
 type listBucketResult struct {
 	keys       []string
 	nextCursor *string
+}
+
+type storedObjectMeta struct {
+	Size     uint64           `json:"s"`
+	ETag     string           `json:"e"`
+	Manifest []storedChunkRef `json:"m"`
+}
+
+type storedChunkRef struct {
+	Offset       uint64           `json:"o"`
+	Size         uint64           `json:"z"`
+	DataShards   int              `json:"d"`
+	ParityShards int              `json:"p"`
+	Shards       []storedShardRef `json:"r,omitempty"`
+	ChunkID      string           `json:"c,omitempty"`
+	NodeID       string           `json:"n,omitempty"`
+}
+
+type storedShardRef struct {
+	ChunkID    string `json:"c"`
+	NodeID     string `json:"n"`
+	ShardIndex int    `json:"i"`
+}
+
+func encodeStoredMeta(meta model.ObjectMeta) ([]byte, error) {
+	stored := storedObjectMeta{
+		Size:     meta.Size,
+		ETag:     meta.ETag,
+		Manifest: make([]storedChunkRef, 0, len(meta.Manifest)),
+	}
+	for _, chunk := range meta.Manifest {
+		storedChunk := storedChunkRef{
+			Offset:       chunk.Offset,
+			Size:         chunk.Size,
+			DataShards:   chunk.DataShards,
+			ParityShards: chunk.ParityShards,
+			ChunkID:      chunk.ChunkID,
+			NodeID:       chunk.NodeID,
+		}
+		if len(chunk.Shards) > 0 {
+			storedChunk.Shards = make([]storedShardRef, 0, len(chunk.Shards))
+			for _, shard := range chunk.Shards {
+				storedChunk.Shards = append(storedChunk.Shards, storedShardRef{
+					ChunkID:    shard.ChunkID,
+					NodeID:     shard.NodeID,
+					ShardIndex: shard.ShardIndex,
+				})
+			}
+		}
+		stored.Manifest = append(stored.Manifest, storedChunk)
+	}
+	return json.Marshal(stored)
+}
+
+func decodeStoredMeta(raw []byte) (model.ObjectMeta, error) {
+	var stored storedObjectMeta
+	if err := json.Unmarshal(raw, &stored); err == nil && (stored.ETag != "" || stored.Size > 0 || len(stored.Manifest) > 0) {
+		meta := model.ObjectMeta{
+			Size:     stored.Size,
+			ETag:     stored.ETag,
+			Manifest: make([]model.ChunkRef, 0, len(stored.Manifest)),
+		}
+		for _, chunk := range stored.Manifest {
+			outChunk := model.ChunkRef{
+				Offset:       chunk.Offset,
+				Size:         chunk.Size,
+				DataShards:   chunk.DataShards,
+				ParityShards: chunk.ParityShards,
+				ChunkID:      chunk.ChunkID,
+				NodeID:       chunk.NodeID,
+			}
+			if len(chunk.Shards) > 0 {
+				outChunk.Shards = make([]model.ShardRef, 0, len(chunk.Shards))
+				for _, shard := range chunk.Shards {
+					outChunk.Shards = append(outChunk.Shards, model.ShardRef{
+						ChunkID:    shard.ChunkID,
+						NodeID:     shard.NodeID,
+						ShardIndex: shard.ShardIndex,
+					})
+				}
+			}
+			meta.Manifest = append(meta.Manifest, outChunk)
+		}
+		return meta, nil
+	}
+
+	var legacy model.ObjectMeta
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return model.ObjectMeta{}, err
+	}
+	return legacy, nil
 }
 
 func manifestToChunkKeys(manifest []model.ChunkRef) []chunkKey {

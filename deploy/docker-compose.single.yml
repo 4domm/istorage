@@ -68,6 +68,10 @@ services:
     environment:
       CHUNKER_LOG_FILTER: chunker=info,tower_http=info
       CHUNK_PORT: 3002
+      CHUNK_PEBBLE_MEM_TABLE_SIZE_MB: 128
+      CHUNK_PEBBLE_L0_COMPACTION_THRESHOLD: 8
+      CHUNK_PEBBLE_L0_STOP_WRITES_THRESHOLD: 32
+      CHUNK_PEBBLE_MAX_CONCURRENT_COMPACTIONS: 4
     volumes:
       - chunk_a_data:/data/chunks
     ports:
@@ -81,6 +85,10 @@ services:
     environment:
       CHUNKER_LOG_FILTER: chunker=info,tower_http=info
       CHUNK_PORT: 3002
+      CHUNK_PEBBLE_MEM_TABLE_SIZE_MB: 128
+      CHUNK_PEBBLE_L0_COMPACTION_THRESHOLD: 8
+      CHUNK_PEBBLE_L0_STOP_WRITES_THRESHOLD: 32
+      CHUNK_PEBBLE_MAX_CONCURRENT_COMPACTIONS: 4
     volumes:
       - chunk_b_data:/data/chunks
     ports:

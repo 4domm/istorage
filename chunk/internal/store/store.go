@@ -14,13 +14,37 @@ type Store struct {
 	writeOpt *pebble.WriteOptions
 }
 
+type Tuning struct {
+	MemTableSizeMB           int
+	L0CompactionThreshold    int
+	L0StopWritesThreshold    int
+	MaxConcurrentCompactions int
+}
+
 type ChunkWrite struct {
 	ChunkID string
 	Data    []byte
 }
 
-func Open(path string, syncWrites bool) (*Store, error) {
-	db, err := pebble.Open(path, &pebble.Options{})
+func Open(path string, syncWrites bool, tuning Tuning) (*Store, error) {
+	options := &pebble.Options{}
+	if tuning.MemTableSizeMB > 0 {
+		options.MemTableSize = uint64(tuning.MemTableSizeMB) * 1024 * 1024
+	}
+	if tuning.L0CompactionThreshold > 0 {
+		options.L0CompactionThreshold = tuning.L0CompactionThreshold
+	}
+	if tuning.L0StopWritesThreshold > 0 {
+		options.L0StopWritesThreshold = tuning.L0StopWritesThreshold
+	}
+	if tuning.MaxConcurrentCompactions > 0 {
+		maxCompactions := tuning.MaxConcurrentCompactions
+		options.MaxConcurrentCompactions = func() int {
+			return maxCompactions
+		}
+	}
+
+	db, err := pebble.Open(path, options)
 	if err != nil {
 		return nil, err
 	}

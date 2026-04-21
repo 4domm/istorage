@@ -7,11 +7,15 @@ import (
 )
 
 type Config struct {
-	Port         int
-	DBPath       string
-	MaxBodyBytes int64
-	SyncWrites   bool
-	LogLevel     string
+	Port                           int
+	DBPath                         string
+	MaxBodyBytes                   int64
+	SyncWrites                     bool
+	PebbleMemTableSizeMB           int
+	PebbleL0CompactionThreshold    int
+	PebbleL0StopWritesThreshold    int
+	PebbleMaxConcurrentCompactions int
+	LogLevel                       string
 }
 
 func Load() Config {
@@ -29,11 +33,15 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:         envInt("CHUNK_PORT", 3002),
-		DBPath:       envString("CHUNK_DB_PATH", "./data/chunks"),
-		MaxBodyBytes: maxBodyBytes,
-		SyncWrites:   envBool("CHUNK_SYNC_WRITES", false),
-		LogLevel:     envString("CHUNKER_LOG_FILTER", "info"),
+		Port:                           envInt("CHUNK_PORT", 3002),
+		DBPath:                         envString("CHUNK_DB_PATH", "./data/chunks"),
+		MaxBodyBytes:                   maxBodyBytes,
+		SyncWrites:                     envBool("CHUNK_SYNC_WRITES", false),
+		PebbleMemTableSizeMB:           envInt("CHUNK_PEBBLE_MEM_TABLE_SIZE_MB", 64),
+		PebbleL0CompactionThreshold:    envInt("CHUNK_PEBBLE_L0_COMPACTION_THRESHOLD", 4),
+		PebbleL0StopWritesThreshold:    envInt("CHUNK_PEBBLE_L0_STOP_WRITES_THRESHOLD", 12),
+		PebbleMaxConcurrentCompactions: envInt("CHUNK_PEBBLE_MAX_CONCURRENT_COMPACTIONS", 2),
+		LogLevel:                       envString("CHUNKER_LOG_FILTER", "info"),
 	}
 }
 

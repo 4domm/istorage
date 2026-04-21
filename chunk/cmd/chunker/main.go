@@ -20,7 +20,12 @@ func main() {
 		Level: parseLogLevel(cfg.LogLevel),
 	}))
 
-	db, err := store.Open(cfg.DBPath, cfg.SyncWrites)
+	db, err := store.Open(cfg.DBPath, cfg.SyncWrites, store.Tuning{
+		MemTableSizeMB:           cfg.PebbleMemTableSizeMB,
+		L0CompactionThreshold:    cfg.PebbleL0CompactionThreshold,
+		L0StopWritesThreshold:    cfg.PebbleL0StopWritesThreshold,
+		MaxConcurrentCompactions: cfg.PebbleMaxConcurrentCompactions,
+	})
 	if err != nil {
 		logger.Error("failed to open pebble", "path", cfg.DBPath, "error", err)
 		os.Exit(1)
