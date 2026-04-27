@@ -1,120 +1,55 @@
 services:
-  foundationdb:
-    image: foundationdb/foundationdb:7.3.69
-    environment:
-      FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep fdbserver >/dev/null"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+  coordinator:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+      target: coordinator
     volumes:
-      - foundationdb_data:/var/fdb/data
-      - foundationdb_logs:/var/fdb/logs
+      - ./configs/single/coordinator.yaml:/app/deploy/configs/coordinator.yaml:ro
+      - coordinator_single_data:/app/data
     ports:
-      - "4500:4500"
+      - "9000:9000"
+    networks:
+      - back
 
-  foundationdb-init:
-    image: foundationdb/foundationdb:7.3.69
-    depends_on:
-      foundationdb:
-        condition: service_healthy
-    network_mode: "service:foundationdb"
-    entrypoint:
-      - /bin/bash
-      - -lc
-      - |
-          set -euo pipefail
-          mkdir -p /var/fdb
-          cat > /var/fdb/fdb.cluster <<'EOF'
-          docker:docker@127.0.0.1:4500
-          EOF
-          for i in $(seq 1 30); do
-            fdbcli -C /var/fdb/fdb.cluster --exec "configure new single memory; status" && exit 0
-            sleep 2
-          done
-          exit 1
-
-  metadata:
+  volume-a:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
-      target: metadata-service
-    environment:
-      LOG_LEVEL: info
-      FDB_CLUSTER_FILE_CONTENTS: docker:docker@foundationdb:4500
-      FDB_API_VERSION: 730
-      METADATA_GC_BATCH_SIZE: 128
-      CHUNKER_NODES: chunker-a@zone-a=http://chunker-a:3002,chunker-b@zone-b=http://chunker-b:3002
-      CHUNKER_HEALTHCHECK_INTERVAL_MS: 2000
-    entrypoint:
-      - /bin/sh
-      - -lc
-      - |
-          ip=$$(getent ahostsv4 foundationdb | awk 'NR==1{print $$1; exit}')
-          export FDB_CLUSTER_FILE_CONTENTS="docker:docker@$${ip}:4500"
-          exec metadata
-    depends_on:
-      foundationdb-init:
-        condition: service_completed_successfully
-    ports:
-      - "3001:3001"
-
-  chunker-a:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-      target: chunker-service
-    environment:
-      CHUNKER_LOG_FILTER: chunker=info,tower_http=info
-      CHUNK_PORT: 3002
-      CHUNK_PEBBLE_MEM_TABLE_SIZE_MB: 128
-      CHUNK_PEBBLE_L0_COMPACTION_THRESHOLD: 8
-      CHUNK_PEBBLE_L0_STOP_WRITES_THRESHOLD: 32
-      CHUNK_PEBBLE_MAX_CONCURRENT_COMPACTIONS: 4
+      dockerfile: deploy/docker/Dockerfile
+      target: volume
     volumes:
-      - chunk_a_data:/data/chunks
-    ports:
-      - "3002:3002"
+      - ./configs/single/volume-a.yaml:/app/deploy/configs/volume.yaml:ro
+      - volume_a_single_data:/app/data
+    networks:
+      - back
 
-  chunker-b:
+  volume-b:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
-      target: chunker-service
-    environment:
-      CHUNKER_LOG_FILTER: chunker=info,tower_http=info
-      CHUNK_PORT: 3002
-      CHUNK_PEBBLE_MEM_TABLE_SIZE_MB: 128
-      CHUNK_PEBBLE_L0_COMPACTION_THRESHOLD: 8
-      CHUNK_PEBBLE_L0_STOP_WRITES_THRESHOLD: 32
-      CHUNK_PEBBLE_MAX_CONCURRENT_COMPACTIONS: 4
+      dockerfile: deploy/docker/Dockerfile
+      target: volume
     volumes:
-      - chunk_b_data:/data/chunks
-    ports:
-      - "3003:3002"
+      - ./configs/single/volume-b.yaml:/app/deploy/configs/volume.yaml:ro
+      - volume_b_single_data:/app/data
+    networks:
+      - back
 
-  api-service:
+  volume-c:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
-      target: api-service
-    environment:
-      API_SERVICE_LOG_FILTER: api_service=info,tower_http=info
-      API_SERVICE_ADDR: 0.0.0.0:3000
-      METADATA_SERVICE_URL: http://metadata:3001
-      API_GET_BATCH_WINDOW: 16
-      API_EC_DATA_SHARDS: 1
-      API_EC_PARITY_SHARDS: 0
-    depends_on:
-      - metadata
-      - chunker-a
-      - chunker-b
-    ports:
-      - "3000:3000"
+      dockerfile: deploy/docker/Dockerfile
+      target: volume
+    volumes:
+      - ./configs/single/volume-c.yaml:/app/deploy/configs/volume.yaml:ro
+      - volume_c_single_data:/app/data
+    networks:
+      - back
+
+networks:
+  back:
 
 volumes:
-  foundationdb_data:
-  foundationdb_logs:
-  chunk_a_data:
-  chunk_b_data:
+  coordinator_single_data:
+  volume_a_single_data:
+  volume_b_single_data:
+  volume_c_single_data:
