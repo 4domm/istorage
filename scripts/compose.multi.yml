@@ -1,0 +1,126 @@
+services:
+  coordinator-a:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: coordinator
+    environment:
+      COORDINATOR_CONFIG_PATH: /app/config/coordinator.yaml
+      COORDINATOR_PUBLIC_URL: http://127.0.0.1:9000
+      COORDINATOR_PACK_SIZE_BYTES: "17179869184"
+      COORDINATOR_REPLICA_COUNT: "2"
+      COORDINATOR_OBJECT_CACHE_ENTRIES: "5000"
+      COORDINATOR_SHARD_ID: "0"
+      COORDINATOR_SHARD_COUNT: "2"
+      COORDINATOR_SHARD_URLS: http://127.0.0.1:9000,http://127.0.0.1:9001
+    volumes:
+      - ./configs/coordinator.yaml:/app/config/coordinator.yaml:ro
+      - coordinator_a_data:/app/data
+    ports:
+      - "9000:9000"
+    networks:
+      - shard-a
+      - shard-b
+
+  coordinator-b:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: coordinator
+    environment:
+      COORDINATOR_CONFIG_PATH: /app/config/coordinator.yaml
+      COORDINATOR_PUBLIC_URL: http://127.0.0.1:9001
+      COORDINATOR_PACK_SIZE_BYTES: "17179869184"
+      COORDINATOR_REPLICA_COUNT: "2"
+      COORDINATOR_OBJECT_CACHE_ENTRIES: "5000"
+      COORDINATOR_SHARD_ID: "1"
+      COORDINATOR_SHARD_COUNT: "2"
+      COORDINATOR_SHARD_URLS: http://127.0.0.1:9000,http://127.0.0.1:9001
+    volumes:
+      - ./configs/coordinator.yaml:/app/config/coordinator.yaml:ro
+      - coordinator_b_data:/app/data
+    ports:
+      - "9001:9000"
+    networks:
+      - shard-a
+      - shard-b
+
+  volume-a1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: volume
+    environment:
+      VOLUME_CONFIG_PATH: /app/config/volume.yaml
+      VOLUME_SERVER_ID: volume-a1
+      VOLUME_PUBLIC_URL: http://volume-a1:9002
+      VOLUME_COORDINATOR_URL: http://coordinator-a:9000
+      VOLUME_MAX_PACK_BYTES: "17179869184"
+    volumes:
+      - ./configs/volume.yaml:/app/config/volume.yaml:ro
+      - volume_a1_data:/app/data
+    networks:
+      - shard-a
+
+  volume-a2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: volume
+    environment:
+      VOLUME_CONFIG_PATH: /app/config/volume.yaml
+      VOLUME_SERVER_ID: volume-a2
+      VOLUME_PUBLIC_URL: http://volume-a2:9002
+      VOLUME_COORDINATOR_URL: http://coordinator-a:9000
+      VOLUME_MAX_PACK_BYTES: "17179869184"
+    volumes:
+      - ./configs/volume.yaml:/app/config/volume.yaml:ro
+      - volume_a2_data:/app/data
+    networks:
+      - shard-a
+
+  volume-b1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: volume
+    environment:
+      VOLUME_CONFIG_PATH: /app/config/volume.yaml
+      VOLUME_SERVER_ID: volume-b1
+      VOLUME_PUBLIC_URL: http://volume-b1:9002
+      VOLUME_COORDINATOR_URL: http://coordinator-b:9000
+      VOLUME_MAX_PACK_BYTES: "17179869184"
+    volumes:
+      - ./configs/volume.yaml:/app/config/volume.yaml:ro
+      - volume_b1_data:/app/data
+    networks:
+      - shard-b
+
+  volume-b2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: volume
+    environment:
+      VOLUME_CONFIG_PATH: /app/config/volume.yaml
+      VOLUME_SERVER_ID: volume-b2
+      VOLUME_PUBLIC_URL: http://volume-b2:9002
+      VOLUME_COORDINATOR_URL: http://coordinator-b:9000
+      VOLUME_MAX_PACK_BYTES: "17179869184"
+    volumes:
+      - ./configs/volume.yaml:/app/config/volume.yaml:ro
+      - volume_b2_data:/app/data
+    networks:
+      - shard-b
+
+networks:
+  shard-a:
+  shard-b:
+
+volumes:
+  coordinator_a_data:
+  coordinator_b_data:
+  volume_a1_data:
+  volume_a2_data:
+  volume_b1_data:
+  volume_b2_data:

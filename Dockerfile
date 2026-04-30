@@ -13,12 +13,10 @@ FROM alpine:3.20 AS coordinator
 WORKDIR /app
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/coordinator /app/coordinator
-COPY --from=build /src/deploy/configs /app/deploy/configs
 ENTRYPOINT ["/app/coordinator"]
 
 FROM alpine:3.20 AS volume
 WORKDIR /app
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/volume /app/volume
-COPY --from=build /src/deploy/configs /app/deploy/configs
 ENTRYPOINT ["/app/volume"]

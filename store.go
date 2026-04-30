@@ -1,4 +1,4 @@
-package volume
+package images
 
 import (
 	"bufio"
@@ -17,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/4domm/images/internal/common"
 )
 
 const (
@@ -33,13 +31,13 @@ type storedMetadata struct {
 }
 
 type entry struct {
-	EntryID     uint64               `json:"entry_id"`
-	Guard       uint32               `json:"guard"`
-	Flags       uint32               `json:"flags"`
-	Offset      int64                `json:"offset"`
-	MetadataLen uint32               `json:"metadata_len"`
-	Size        uint64               `json:"size"`
-	Metadata    common.ImageMetadata `json:"metadata"`
+	EntryID     uint64        `json:"entry_id"`
+	Guard       uint32        `json:"guard"`
+	Flags       uint32        `json:"flags"`
+	Offset      int64         `json:"offset"`
+	MetadataLen uint32        `json:"metadata_len"`
+	Size        uint64        `json:"size"`
+	Metadata    ImageMetadata `json:"metadata"`
 }
 
 type packFile struct {
@@ -51,7 +49,7 @@ type packFile struct {
 	mu              sync.RWMutex
 	file            *os.File
 	size            int64
-	state           common.PackState
+	state           PackState
 	index           map[uint64]entry
 	snapshotDirty   bool
 	mutationVersion uint64
@@ -59,14 +57,14 @@ type packFile struct {
 
 type Store struct {
 	mu         sync.RWMutex
-	cfg        Config
+	cfg        VolumeConfig
 	packs      map[uint32]*packFile
 	httpClient *http.Client
 	stopCh     chan struct{}
 	wg         sync.WaitGroup
 }
 
-func OpenStore(cfg Config) (*Store, error) {
+func OpenStore(cfg VolumeConfig) (*Store, error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -141,7 +139,7 @@ func (s *Store) ensurePack(packID uint32, maxBytes int64) (*packFile, error) {
 		maxBytes: maxBytes,
 		file:     file,
 		size:     info.Size(),
-		state:    common.PackStateWritable,
+		state:    PackStateWritable,
 		index:    make(map[uint64]entry),
 	}
 	if err := pack.recover(); err != nil {
@@ -149,7 +147,7 @@ func (s *Store) ensurePack(packID uint32, maxBytes int64) (*packFile, error) {
 		return nil, err
 	}
 	if pack.size >= pack.maxBytes {
-		pack.state = common.PackStateReadonly
+		pack.state = PackStateReadonly
 	}
 	s.packs[packID] = pack
 	return pack, nil
@@ -165,14 +163,14 @@ func (p *packFile) recover() error {
 	coveredOffset, err := p.loadSnapshot()
 	if err != nil || coveredOffset > fileSize {
 		p.index = make(map[uint64]entry)
-		p.state = common.PackStateWritable
+		p.state = PackStateWritable
 		coveredOffset = 0
 	}
 	offset, err := p.replayFrom(coveredOffset)
 	if err != nil {
 		if coveredOffset != 0 {
 			p.index = make(map[uint64]entry)
-			p.state = common.PackStateWritable
+			p.state = PackStateWritable
 			offset, err = p.replayFrom(0)
 		}
 		if err != nil {
@@ -206,7 +204,7 @@ func (p *packFile) loadSnapshot() (int64, error) {
 		p.index[item.EntryID] = item
 	}
 	p.size = snapshot.Size
-	p.state = common.PackState(snapshot.State)
+	p.state = PackState(snapshot.State)
 	return snapshot.CoveredOffset, nil
 }
 
@@ -271,7 +269,7 @@ func readRecord(reader *bufio.Reader, offset int64) (entry, int64, error) {
 		Offset:      payloadOffset,
 		MetadataLen: metaLen,
 		Size:        dataSize,
-		Metadata: common.ImageMetadata{
+		Metadata: ImageMetadata{
 			ContentType: metadata.ContentType,
 			Checksum:    hex.EncodeToString(checksumBytes),
 			Size:        dataSize,
@@ -307,7 +305,7 @@ func (s *Store) CreateVolume(packID uint32, maxBytes int64) error {
 	return err
 }
 
-func (s *Store) WritePrimary(packID uint32, req common.EntryWriteRequest, body []byte) error {
+func (s *Store) WritePrimary(packID uint32, req EntryWriteRequest, body []byte) error {
 	pack, err := s.ensurePack(packID, s.cfg.MaxPackBytes)
 	if err != nil {
 		return err
@@ -326,7 +324,7 @@ func (s *Store) WritePrimary(packID uint32, req common.EntryWriteRequest, body [
 	return nil
 }
 
-func (s *Store) Replicate(packID uint32, req common.EntryWriteRequest, body []byte) error {
+func (s *Store) Replicate(packID uint32, req EntryWriteRequest, body []byte) error {
 	pack, err := s.ensurePack(packID, s.cfg.MaxPackBytes)
 	if err != nil {
 		return err
@@ -334,7 +332,7 @@ func (s *Store) Replicate(packID uint32, req common.EntryWriteRequest, body []by
 	return pack.append(req, body, false)
 }
 
-func (s *Store) DeletePrimary(packID uint32, req common.EntryDeleteRequest) error {
+func (s *Store) DeletePrimary(packID uint32, req EntryDeleteRequest) error {
 	pack, err := s.ensurePack(packID, s.cfg.MaxPackBytes)
 	if err != nil {
 		return err
@@ -353,7 +351,7 @@ func (s *Store) DeletePrimary(packID uint32, req common.EntryDeleteRequest) erro
 	return nil
 }
 
-func (s *Store) DeleteReplica(packID uint32, req common.EntryDeleteRequest) error {
+func (s *Store) DeleteReplica(packID uint32, req EntryDeleteRequest) error {
 	pack, err := s.ensurePack(packID, s.cfg.MaxPackBytes)
 	if err != nil {
 		return err
@@ -377,7 +375,7 @@ func (s *Store) Compact(packID uint32) error {
 	return pack.compact()
 }
 
-func (s *Store) RepairVolume(packID uint32, replicas []common.Replica) error {
+func (s *Store) RepairVolume(packID uint32, replicas []Replica) error {
 	pack, err := s.ensurePack(packID, s.cfg.MaxPackBytes)
 	if err != nil {
 		return err
@@ -385,20 +383,20 @@ func (s *Store) RepairVolume(packID uint32, replicas []common.Replica) error {
 	return pack.repairToReplicas(s, replicas)
 }
 
-func (s *Store) Heartbeat() common.HeartbeatRequest {
+func (s *Store) Heartbeat() HeartbeatRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	packs := make([]common.HeartbeatPack, 0, len(s.packs))
+	packs := make([]HeartbeatPack, 0, len(s.packs))
 	for _, pack := range s.packs {
 		pack.mu.RLock()
-		packs = append(packs, common.HeartbeatPack{
+		packs = append(packs, HeartbeatPack{
 			PackID: pack.id,
 			State:  pack.state,
 			Size:   pack.size,
 		})
 		pack.mu.RUnlock()
 	}
-	return common.HeartbeatRequest{
+	return HeartbeatRequest{
 		ServerID:     s.cfg.ServerID,
 		URL:          s.cfg.PublicURL,
 		FreeBytes:    diskFreeGuess(s.cfg.MaxPackBytes, packs),
@@ -407,11 +405,11 @@ func (s *Store) Heartbeat() common.HeartbeatRequest {
 	}
 }
 
-func (s *Store) replicate(baseURL string, packID uint32, req common.EntryWriteRequest, body []byte) error {
+func (s *Store) replicate(baseURL string, packID uint32, req EntryWriteRequest, body []byte) error {
 	return postBinary(s.httpClient, baseURL, fmt.Sprintf("/internal/packs/%d/replicate", packID), req, body)
 }
 
-func (s *Store) deleteReplica(baseURL string, packID uint32, req common.EntryDeleteRequest) error {
+func (s *Store) deleteReplica(baseURL string, packID uint32, req EntryDeleteRequest) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -432,10 +430,10 @@ func (s *Store) deleteReplica(baseURL string, packID uint32, req common.EntryDel
 	return nil
 }
 
-func (p *packFile) append(req common.EntryWriteRequest, body []byte, tombstone bool) error {
+func (p *packFile) append(req EntryWriteRequest, body []byte, tombstone bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.state == common.PackStateReadonly && !tombstone {
+	if p.state == PackStateReadonly && !tombstone {
 		return fmt.Errorf("pack is readonly")
 	}
 	meta := storedMetadata{
@@ -502,7 +500,7 @@ func (p *packFile) append(req common.EntryWriteRequest, body []byte, tombstone b
 		Metadata:    req.Metadata,
 	}
 	if p.size >= p.maxBytes {
-		p.state = common.PackStateReadonly
+		p.state = PackStateReadonly
 	}
 	p.snapshotDirty = true
 	p.mutationVersion++
@@ -510,10 +508,10 @@ func (p *packFile) append(req common.EntryWriteRequest, body []byte, tombstone b
 }
 
 func (p *packFile) appendTombstone(entryID uint64, guard uint32) error {
-	return p.append(common.EntryWriteRequest{
+	return p.append(EntryWriteRequest{
 		EntryID:  entryID,
 		Guard:    guard,
-		Metadata: common.ImageMetadata{Checksum: strings.Repeat("0", sha256.Size*2)},
+		Metadata: ImageMetadata{Checksum: strings.Repeat("0", sha256.Size*2)},
 	}, nil, true)
 }
 
@@ -538,7 +536,7 @@ func (p *packFile) read(entryID uint64, guard uint32) (entry, io.ReadCloser, err
 func (p *packFile) compact() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.state = common.PackStateCompacting
+	p.state = PackStateCompacting
 	tmpPath := p.path + ".compact"
 	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644)
 	if err != nil {
@@ -596,16 +594,16 @@ func (p *packFile) compact() error {
 	p.index = newIndex
 	p.size = offset
 	if p.size < p.maxBytes {
-		p.state = common.PackStateWritable
+		p.state = PackStateWritable
 	} else {
-		p.state = common.PackStateReadonly
+		p.state = PackStateReadonly
 	}
 	p.snapshotDirty = true
 	p.mutationVersion++
 	return p.snapshotNow()
 }
 
-func (p *packFile) repairToReplicas(store *Store, replicas []common.Replica) error {
+func (p *packFile) repairToReplicas(store *Store, replicas []Replica) error {
 	p.mu.RLock()
 	live := make([]entry, 0, len(p.index))
 	for _, item := range p.index {
@@ -629,7 +627,7 @@ func (p *packFile) repairToReplicas(store *Store, replicas []common.Replica) err
 		if _, err := io.ReadFull(src, body); err != nil {
 			return err
 		}
-		req := common.EntryWriteRequest{
+		req := EntryWriteRequest{
 			EntryID:  item.EntryID,
 			Guard:    item.Guard,
 			Metadata: item.Metadata,
@@ -654,7 +652,7 @@ func paddedBytes(n int64) int64 {
 	return n + (8 - rem)
 }
 
-func diskFreeGuess(maxPackBytes int64, packs []common.HeartbeatPack) int64 {
+func diskFreeGuess(maxPackBytes int64, packs []HeartbeatPack) int64 {
 	var used int64
 	for _, pack := range packs {
 		used += pack.Size

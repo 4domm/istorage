@@ -1,4 +1,4 @@
-package coordinator
+package images
 
 import (
 	"bytes"
@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-
-	"github.com/4domm/images/internal/common"
 )
 
 type serverState struct {
@@ -31,23 +29,23 @@ type serverState struct {
 }
 
 type serverPack struct {
-	State common.PackState `json:"state"`
-	Size  int64            `json:"size"`
+	State PackState `json:"state"`
+	Size  int64     `json:"size"`
 }
 
 type packState struct {
-	PackID      uint32           `json:"pack_id"`
-	State       common.PackState `json:"state"`
-	Replicas    []common.Replica `json:"replicas"`
-	Primary     common.Replica   `json:"primary"`
-	NextEntryID uint64           `json:"next_entry_id"`
-	MaxBytes    int64            `json:"max_bytes"`
-	SizeBytes   int64            `json:"size_bytes"`
+	PackID      uint32    `json:"pack_id"`
+	State       PackState `json:"state"`
+	Replicas    []Replica `json:"replicas"`
+	Primary     Replica   `json:"primary"`
+	NextEntryID uint64    `json:"next_entry_id"`
+	MaxBytes    int64     `json:"max_bytes"`
+	SizeBytes   int64     `json:"size_bytes"`
 }
 
 type Registry struct {
 	mu          sync.Mutex
-	cfg         Config
+	cfg         CoordinatorConfig
 	client      *http.Client
 	db          *badger.DB
 	nextPack    uint32
@@ -56,7 +54,7 @@ type Registry struct {
 	objectCache *objectCache
 }
 
-func LoadRegistry(cfg Config) (*Registry, error) {
+func LoadRegistry(cfg CoordinatorConfig) (*Registry, error) {
 	if err := os.MkdirAll(filepath.Clean(cfg.DBPath), 0o755); err != nil {
 		return nil, err
 	}
@@ -167,7 +165,7 @@ func (r *Registry) saveLocked() error {
 	})
 }
 
-func (r *Registry) Heartbeat(req common.HeartbeatRequest) error {
+func (r *Registry) Heartbeat(req HeartbeatRequest) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -186,7 +184,7 @@ func (r *Registry) Heartbeat(req common.HeartbeatRequest) error {
 		state.Packs[pack.PackID] = serverPack{State: pack.State, Size: pack.Size}
 		if existing, ok := r.packs[pack.PackID]; ok {
 			existing.SizeBytes = pack.Size
-			if existing.State != common.PackStateCompacting {
+			if existing.State != PackStateCompacting {
 				existing.State = pack.State
 			}
 		}
@@ -194,56 +192,56 @@ func (r *Registry) Heartbeat(req common.HeartbeatRequest) error {
 	return r.saveLocked()
 }
 
-func (r *Registry) Allocate(ctx context.Context, size uint64) (common.AllocateResponse, error) {
+func (r *Registry) Allocate(ctx context.Context, size uint64) (AllocateResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	pack, err := r.findWritablePackLocked(size)
 	if err != nil {
-		return common.AllocateResponse{}, err
+		return AllocateResponse{}, err
 	}
 	entryID := pack.NextEntryID
 	pack.NextEntryID++
 	pack.SizeBytes += int64(size)
 	if pack.SizeBytes >= pack.MaxBytes {
-		pack.State = common.PackStateReadonly
+		pack.State = PackStateReadonly
 	}
 	guard, err := randomUint32()
 	if err != nil {
-		return common.AllocateResponse{}, err
+		return AllocateResponse{}, err
 	}
-	blobID := common.BlobID{PackID: pack.PackID, EntryID: entryID, Guard: guard}
+	blobID := BlobID{PackID: pack.PackID, EntryID: entryID, Guard: guard}
 	if err := r.saveLocked(); err != nil {
-		return common.AllocateResponse{}, err
+		return AllocateResponse{}, err
 	}
-	return common.AllocateResponse{
+	return AllocateResponse{
 		BlobID:   blobID.String(),
 		PackID:   pack.PackID,
 		EntryID:  entryID,
 		Guard:    guard,
 		Primary:  pack.Primary,
-		Replicas: append([]common.Replica(nil), pack.Replicas...),
+		Replicas: append([]Replica(nil), pack.Replicas...),
 	}, nil
 }
 
-func (r *Registry) Lookup(packID uint32) (common.LookupResponse, error) {
+func (r *Registry) Lookup(packID uint32) (LookupResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pack, ok := r.packs[packID]
 	if !ok {
-		return common.LookupResponse{}, fmt.Errorf("pack not found")
+		return LookupResponse{}, fmt.Errorf("pack not found")
 	}
-	return common.LookupResponse{
+	return LookupResponse{
 		PackID:   packID,
 		State:    pack.State,
 		Primary:  pack.Primary,
-		Replicas: append([]common.Replica(nil), pack.Replicas...),
+		Replicas: append([]Replica(nil), pack.Replicas...),
 	}, nil
 }
 
 func (r *Registry) findWritablePackLocked(size uint64) (*packState, error) {
 	for _, pack := range r.packs {
-		if pack.State == common.PackStateWritable && pack.SizeBytes+int64(size) <= pack.MaxBytes {
+		if pack.State == PackStateWritable && pack.SizeBytes+int64(size) <= pack.MaxBytes {
 			return pack, nil
 		}
 	}
@@ -267,21 +265,21 @@ func (r *Registry) createPackLocked() (*packState, error) {
 		return healthy[i].FreeBytes > healthy[j].FreeBytes
 	})
 	selected := healthy[:r.cfg.ReplicaCount]
-	replicas := make([]common.Replica, 0, len(selected))
+	replicas := make([]Replica, 0, len(selected))
 	for _, server := range selected {
-		replicas = append(replicas, common.Replica{ServerID: server.ServerID, URL: server.URL})
+		replicas = append(replicas, Replica{ServerID: server.ServerID, URL: server.URL})
 	}
 	packID := r.nextPack
 	r.nextPack++
 	for _, replica := range replicas {
-		payload := common.CreatePackRequest{PackID: packID, MaxPackBytes: r.cfg.PackSizeBytes}
+		payload := CreatePackRequest{PackID: packID, MaxPackBytes: r.cfg.PackSizeBytes}
 		if err := postJSON(r.client, ctxWithTimeout(), replica.URL+"/internal/packs/create", payload, nil); err != nil {
 			return nil, fmt.Errorf("create pack on %s: %w", replica.ServerID, err)
 		}
 	}
 	pack := &packState{
 		PackID:      packID,
-		State:       common.PackStateWritable,
+		State:       PackStateWritable,
 		Replicas:    replicas,
 		Primary:     replicas[0],
 		NextEntryID: 1,
@@ -292,7 +290,7 @@ func (r *Registry) createPackLocked() (*packState, error) {
 		if server.Packs == nil {
 			server.Packs = map[uint32]serverPack{}
 		}
-		server.Packs[packID] = serverPack{State: common.PackStateWritable}
+		server.Packs[packID] = serverPack{State: PackStateWritable}
 		server.FreeBytes -= r.cfg.PackSizeBytes
 		if server.FreeBytes < 0 {
 			server.FreeBytes = 0

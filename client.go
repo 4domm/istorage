@@ -1,4 +1,4 @@
-package coordinator
+package images
 
 import (
 	"bytes"
@@ -7,23 +7,21 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/4domm/images/internal/common"
 )
 
 type StorageClient struct {
 	http *http.Client
 }
 
-func NewStorageClient(cfg Config) *StorageClient {
+func NewStorageClient(cfg CoordinatorConfig) *StorageClient {
 	return &StorageClient{http: &http.Client{Timeout: cfg.HTTPTimeout}}
 }
 
-func (c *StorageClient) Write(primary common.Replica, packID uint32, req common.EntryWriteRequest, body []byte) error {
+func (c *StorageClient) Write(primary Replica, packID uint32, req EntryWriteRequest, body []byte) error {
 	return c.postBinary(primary.URL, fmt.Sprintf("/internal/packs/%d/write-primary", packID), req, body)
 }
 
-func (c *StorageClient) Delete(primary common.Replica, packID uint32, req common.EntryDeleteRequest) error {
+func (c *StorageClient) Delete(primary Replica, packID uint32, req EntryDeleteRequest) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -44,17 +42,17 @@ func (c *StorageClient) Delete(primary common.Replica, packID uint32, req common
 	return nil
 }
 
-func (c *StorageClient) Read(replica common.Replica, packID uint32, entryID uint64, guard uint32, hdr http.Header) (*http.Response, error) {
+func (c *StorageClient) Read(replica Replica, packID uint32, entryID uint64, guard uint32, hdr http.Header) (*http.Response, error) {
 	u := strings.TrimRight(replica.URL, "/") + fmt.Sprintf("/internal/packs/%d/entries/%d?guard=%d", packID, entryID, guard)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	common.CopyHeaders(req.Header, hdr, "Range", "If-None-Match", "If-Modified-Since")
+	CopyHeaders(req.Header, hdr, "Range", "If-None-Match", "If-Modified-Since")
 	return c.http.Do(req)
 }
 
-func (c *StorageClient) postBinary(baseURL, path string, req common.EntryWriteRequest, body []byte) error {
+func (c *StorageClient) postBinary(baseURL, path string, req EntryWriteRequest, body []byte) error {
 	meta, err := json.Marshal(req)
 	if err != nil {
 		return err

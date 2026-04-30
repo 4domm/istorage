@@ -4,15 +4,15 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/4domm/images/internal/coordinator"
+	images "github.com/4domm/images"
 )
 
 func main() {
-	cfg, err := coordinator.LoadConfig()
+	cfg, err := images.LoadCoordinatorConfig()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	registry, err := coordinator.LoadRegistry(cfg)
+	registry, err := images.LoadRegistry(cfg)
 	if err != nil {
 		log.Fatalf("load registry: %v", err)
 	}
@@ -22,7 +22,7 @@ func main() {
 		}
 	}()
 	log.Printf("coordinator listening on %s", cfg.ListenAddr)
-	if err := http.ListenAndServe(cfg.ListenAddr, coordinator.NewHandler(cfg, registry)); err != nil {
+	if err := http.ListenAndServe(cfg.ListenAddr, images.NewCoordinatorHandler(cfg, registry)); err != nil {
 		log.Fatal(err)
 	}
 }

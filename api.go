@@ -1,4 +1,4 @@
-package coordinator
+package images
 
 import (
 	"io"
@@ -6,11 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/4domm/images/internal/common"
 )
 
-func NewHandler(cfg Config, registry *Registry) http.Handler {
+func NewCoordinatorHandler(cfg CoordinatorConfig, registry *Registry) http.Handler {
 	storage := NewStorageClient(cfg)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -22,37 +20,37 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		var req common.HeartbeatRequest
-		if err := common.DecodeJSON(r, &req); err != nil {
-			common.WriteError(w, http.StatusBadRequest, err.Error())
+		var req HeartbeatRequest
+		if err := DecodeJSON(r, &req); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if req.ServerID == "" || req.URL == "" {
-			common.WriteError(w, http.StatusBadRequest, "server_id and url are required")
+			WriteError(w, http.StatusBadRequest, "server_id and url are required")
 			return
 		}
 		if err := registry.Heartbeat(req); err != nil {
-			common.WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/internal/allocate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
-		var req common.AllocateRequest
-		if err := common.DecodeJSON(r, &req); err != nil {
-			common.WriteError(w, http.StatusBadRequest, err.Error())
+		var req AllocateRequest
+		if err := DecodeJSON(r, &req); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		resp, err := registry.Allocate(r.Context(), req.Size)
 		if err != nil {
-			common.WriteError(w, http.StatusServiceUnavailable, err.Error())
+			WriteError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
-		common.WriteJSON(w, http.StatusOK, resp)
+		WriteJSON(w, http.StatusOK, resp)
 	})
 	mux.HandleFunc("/internal/lookup", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -61,27 +59,27 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 		}
 		packID, err := strconv.ParseUint(r.URL.Query().Get("pack_id"), 10, 32)
 		if err != nil {
-			common.WriteError(w, http.StatusBadRequest, "invalid pack_id")
+			WriteError(w, http.StatusBadRequest, "invalid pack_id")
 			return
 		}
 		resp, err := registry.Lookup(uint32(packID))
 		if err != nil {
-			common.WriteError(w, http.StatusNotFound, err.Error())
+			WriteError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		common.WriteJSON(w, http.StatusOK, resp)
+		WriteJSON(w, http.StatusOK, resp)
 	})
 	mux.HandleFunc("/internal/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
 			return
 		}
-		common.WriteJSON(w, http.StatusOK, registry.Status())
+		WriteJSON(w, http.StatusOK, registry.Status())
 	})
 	mux.HandleFunc("/b/", func(w http.ResponseWriter, r *http.Request) {
 		bucket, key, hasKey := parseBucketPath(strings.TrimPrefix(r.URL.Path, "/b/"))
 		if bucket == "" {
-			common.WriteError(w, http.StatusBadRequest, "bucket required")
+			WriteError(w, http.StatusBadRequest, "bucket required")
 			return
 		}
 		if redirectURL, ok := registry.RedirectURL(bucket, r.URL.RequestURI()); ok {
@@ -89,7 +87,7 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 			return
 		}
 		if !registry.OwnsBucket(bucket) {
-			common.WriteError(w, http.StatusServiceUnavailable, "bucket shard is not configured")
+			WriteError(w, http.StatusServiceUnavailable, "bucket shard is not configured")
 			return
 		}
 
@@ -103,7 +101,7 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 			}
 			records, err := registry.ListObjects(bucket, r.URL.Query().Get("prefix"), limit)
 			if err != nil {
-				common.WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			out := make([]map[string]any, 0, len(records))
@@ -118,10 +116,10 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 					"updated_at":   record.UpdatedAt.UTC(),
 				})
 			}
-			common.WriteJSON(w, http.StatusOK, map[string]any{"objects": out})
+			WriteJSON(w, http.StatusOK, map[string]any{"objects": out})
 			return
 		case !hasKey:
-			common.WriteError(w, http.StatusBadRequest, "object key required")
+			WriteError(w, http.StatusBadRequest, "object key required")
 			return
 		}
 
@@ -131,27 +129,27 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 			defer reader.Close()
 			body, err := io.ReadAll(reader)
 			if err != nil {
-				common.WriteError(w, http.StatusBadRequest, err.Error())
+				WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 			if len(body) == 0 {
-				common.WriteError(w, http.StatusBadRequest, "empty body")
+				WriteError(w, http.StatusBadRequest, "empty body")
 				return
 			}
-			meta := common.DetectImageMetadata(body, r.Header.Get("Content-Type"))
+			meta := DetectImageMetadata(body, r.Header.Get("Content-Type"))
 			alloc, err := registry.Allocate(r.Context(), uint64(len(body)))
 			if err != nil {
-				common.WriteError(w, http.StatusServiceUnavailable, err.Error())
+				WriteError(w, http.StatusServiceUnavailable, err.Error())
 				return
 			}
-			writeReq := common.EntryWriteRequest{
+			writeReq := EntryWriteRequest{
 				EntryID:  alloc.EntryID,
 				Guard:    alloc.Guard,
 				Metadata: meta,
 				Replicas: alloc.Replicas,
 			}
 			if err := storage.Write(alloc.Primary, alloc.PackID, writeReq, body); err != nil {
-				common.WriteError(w, http.StatusBadGateway, err.Error())
+				WriteError(w, http.StatusBadGateway, err.Error())
 				return
 			}
 			record := objectRecord{
@@ -163,13 +161,13 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 			}
 			previous, err := registry.PutObject(bucket, key, record)
 			if err != nil {
-				common.WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			if previous != nil && previous.BlobID != "" && previous.BlobID != alloc.BlobID {
 				_ = deleteBlobByID(storage, registry, previous.BlobID)
 			}
-			common.WriteJSON(w, http.StatusCreated, map[string]any{
+			WriteJSON(w, http.StatusCreated, map[string]any{
 				"bucket":       bucket,
 				"key":          key,
 				"blob_id":      alloc.BlobID,
@@ -181,21 +179,21 @@ func NewHandler(cfg Config, registry *Registry) http.Handler {
 		case http.MethodGet, http.MethodHead:
 			record, err := registry.GetObject(bucket, key)
 			if err != nil {
-				common.WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			if record == nil {
-				common.WriteError(w, http.StatusNotFound, "object not found")
+				WriteError(w, http.StatusNotFound, "object not found")
 				return
 			}
 			if err := serveBlobByID(storage, registry, record.BlobID, w, r); err != nil {
-				common.WriteError(w, http.StatusNotFound, err.Error())
+				WriteError(w, http.StatusNotFound, err.Error())
 				return
 			}
 		case http.MethodDelete:
 			record, err := registry.DeleteObject(bucket, key)
 			if err != nil {
-				common.WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			if record == nil {
@@ -224,7 +222,7 @@ func parseBucketPath(raw string) (bucket string, key string, hasKey bool) {
 }
 
 func serveBlobByID(storage *StorageClient, registry *Registry, rawBlobID string, w http.ResponseWriter, r *http.Request) error {
-	blobID, err := common.ParseBlobID(rawBlobID)
+	blobID, err := ParseBlobID(rawBlobID)
 	if err != nil {
 		return err
 	}
@@ -232,7 +230,7 @@ func serveBlobByID(storage *StorageClient, registry *Registry, rawBlobID string,
 	if err != nil {
 		return err
 	}
-	replicas := append([]common.Replica{lookup.Primary}, lookup.Replicas...)
+	replicas := append([]Replica{lookup.Primary}, lookup.Replicas...)
 	for _, replica := range replicas {
 		resp, readErr := storage.Read(replica, blobID.PackID, blobID.EntryID, blobID.Guard, r.Header)
 		if readErr != nil {
@@ -243,7 +241,7 @@ func serveBlobByID(storage *StorageClient, registry *Registry, rawBlobID string,
 			continue
 		}
 		defer resp.Body.Close()
-		common.CopyHeaders(w.Header(), resp.Header, "Content-Type", "Content-Length", "Content-Range", "ETag", "Cache-Control", "Content-Disposition")
+		CopyHeaders(w.Header(), resp.Header, "Content-Type", "Content-Length", "Content-Range", "ETag", "Cache-Control", "Content-Disposition")
 		if w.Header().Get("Cache-Control") == "" {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
@@ -257,7 +255,7 @@ func serveBlobByID(storage *StorageClient, registry *Registry, rawBlobID string,
 }
 
 func deleteBlobByID(storage *StorageClient, registry *Registry, rawBlobID string) error {
-	blobID, err := common.ParseBlobID(rawBlobID)
+	blobID, err := ParseBlobID(rawBlobID)
 	if err != nil {
 		return err
 	}
@@ -265,7 +263,7 @@ func deleteBlobByID(storage *StorageClient, registry *Registry, rawBlobID string
 	if err != nil {
 		return err
 	}
-	req := common.EntryDeleteRequest{
+	req := EntryDeleteRequest{
 		EntryID:  blobID.EntryID,
 		Guard:    blobID.Guard,
 		Replicas: lookup.Replicas,

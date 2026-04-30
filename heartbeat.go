@@ -1,4 +1,4 @@
-package volume
+package images
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func StartHeartbeatLoop(ctx context.Context, store *Store, cfg Config) {
+func StartHeartbeatLoop(ctx context.Context, store *Store, cfg VolumeConfig) {
 	ticker := time.NewTicker(cfg.HeartbeatInterval)
 	go func() {
 		defer ticker.Stop()
@@ -28,7 +28,7 @@ func StartHeartbeatLoop(ctx context.Context, store *Store, cfg Config) {
 	}()
 }
 
-func sendHeartbeat(store *Store, cfg Config) error {
+func sendHeartbeat(store *Store, cfg VolumeConfig) error {
 	payload, err := json.Marshal(store.Heartbeat())
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-package coordinator
+package images
 
 import (
 	"container/list"
@@ -9,16 +9,14 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-
-	"github.com/4domm/images/internal/common"
 )
 
 type objectRecord struct {
-	Bucket    string               `json:"bucket"`
-	Key       string               `json:"key"`
-	BlobID    string               `json:"blob_id"`
-	Metadata  common.ImageMetadata `json:"metadata"`
-	UpdatedAt time.Time            `json:"updated_at"`
+	Bucket    string        `json:"bucket"`
+	Key       string        `json:"key"`
+	BlobID    string        `json:"blob_id"`
+	Metadata  ImageMetadata `json:"metadata"`
+	UpdatedAt time.Time     `json:"updated_at"`
 }
 
 type objectCacheKey struct {

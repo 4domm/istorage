@@ -1,4 +1,4 @@
-package common
+package images
 
 type Replica struct {
 	ServerID string `json:"server_id"`

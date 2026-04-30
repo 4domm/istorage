@@ -1,4 +1,4 @@
-package coordinator
+package images
 
 import (
 	"io"
@@ -7,12 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/4domm/images/internal/common"
 )
 
 func TestAllocateCreatesPack(t *testing.T) {
-	cfg := Config{
+	cfg := CoordinatorConfig{
 		DBPath:             filepath.Join(t.TempDir(), "badger"),
 		PackSizeBytes:      1024,
 		ReplicaCount:       1,
@@ -39,7 +37,7 @@ func TestAllocateCreatesPack(t *testing.T) {
 			}, nil
 		}),
 	}
-	if err := registry.Heartbeat(common.HeartbeatRequest{
+	if err := registry.Heartbeat(HeartbeatRequest{
 		ServerID:     "s1",
 		URL:          "http://storage-a",
 		FreeBytes:    1 << 20,
@@ -57,7 +55,7 @@ func TestAllocateCreatesPack(t *testing.T) {
 }
 
 func TestObjectCatalogRoundTripAndList(t *testing.T) {
-	cfg := Config{
+	cfg := CoordinatorConfig{
 		DBPath:             filepath.Join(t.TempDir(), "badger"),
 		ObjectCacheEntries: 4,
 		ShardID:            0,
@@ -94,7 +92,7 @@ func TestObjectCatalogRoundTripAndList(t *testing.T) {
 		Bucket: "images-demo",
 		Key:    "cats/one.jpg",
 		BlobID: "00000001,0000000000000001,00000001",
-		Metadata: common.ImageMetadata{
+		Metadata: ImageMetadata{
 			ContentType: "image/jpeg",
 			Size:        123,
 		},
@@ -120,7 +118,7 @@ func TestObjectCatalogRoundTripAndList(t *testing.T) {
 		Bucket: "images-demo",
 		Key:    "cats/two.jpg",
 		BlobID: "00000001,0000000000000002,00000002",
-		Metadata: common.ImageMetadata{
+		Metadata: ImageMetadata{
 			ContentType: "image/jpeg",
 			Size:        456,
 		},
